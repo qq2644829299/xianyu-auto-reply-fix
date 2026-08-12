@@ -152,6 +152,17 @@ input::placeholder, textarea::placeholder { color: #8a8f97 !important; }
   outline: 3px solid rgba(255,95,3,.55) !important;
   outline-offset: 2px !important;
 }
+/* Standalone Switch component. The checkbox remains the native control for form data and keyboard access. */
+.el-switch-field { display: inline-flex; align-items: center; gap: 10px; min-height: 24px; }
+.el-switch { position: relative; display: inline-flex; flex: 0 0 auto; width: 40px; height: 20px; margin: 0; cursor: pointer; }
+.el-switch__input { position: absolute; width: 1px; height: 1px; margin: -1px; clip: rect(0, 0, 0, 0); clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
+.el-switch__core { display: block; width: 40px; height: 20px; box-sizing: border-box; border: 1px solid #dcdfe6; border-radius: 10px; background: #dcdfe6; transition: background-color .2s, border-color .2s; }
+.el-switch__action { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.22); transition: transform .2s; }
+.el-switch__input:checked + .el-switch__core { border-color: #67c23a; background: #67c23a; }
+.el-switch__input:checked + .el-switch__core .el-switch__action { transform: translateX(20px); }
+.el-switch__input:focus-visible + .el-switch__core { outline: 2px solid #409eff; outline-offset: 2px; }
+.el-switch__input:disabled + .el-switch__core { cursor: not-allowed; opacity: .6; }
+.el-switch-field__label { margin: 0; color: #606266; font-size: 14px; line-height: 20px; cursor: pointer; }
 .input-group-text { background: #f4f2e9 !important; color: #596260 !important; border-color: #c9c9bd !important; }
 table thead, .data-table thead, .table thead { background: #f4f2e9 !important; }
 table th, .data-table th, .table th { color: #4e5864 !important; }
