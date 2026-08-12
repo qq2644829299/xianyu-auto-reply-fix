@@ -1000,7 +1000,7 @@
             <div class="d-flex align-items-center gap-3">
               <input type="text" class="form-control" id="itemSearchInput"
                      placeholder="搜索商品标题或详情..." style="width: 300px;">
-              <h5 class="mb-0">商品列表(自动发货根据商品标题和商品详情匹配关键字)</h5>
+              <h5 class="mb-0">商品列表（为商品绑定卡券后即可自动发货）</h5>
             </div>
             <button class="btn btn-sm btn-outline-danger" onclick="batchDeleteItems()" id="batchDeleteBtn" disabled>
               <i class="bi bi-trash"></i> 批量删除
@@ -1026,13 +1026,14 @@
                     <th style="width: 18%">商品价格</th>
                     <th style="width: 8%">多规格</th>
                     <th style="width: 8%">多数量发货</th>
+                    <th style="width: 12%">自动发货卡券</th>
                     <th style="width: 10%">更新时间</th>
                     <th style="width: 15%">操作</th>
                   </tr>
                 </thead>
                 <tbody id="itemsTableBody">
                   <tr>
-                    <td colspan="10" class="text-center text-muted">加载中...</td>
+                    <td colspan="11" class="text-center text-muted">加载中...</td>
                   </tr>
                 </tbody>
               </table>
@@ -5263,6 +5264,27 @@
           <button type="button" class="btn btn-primary" onclick="saveItemDetail()">
             <i class="bi bi-check-circle me-1"></i>保存
           </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 商品自动发货卡券绑定 -->
+  <div class="modal fade" id="itemDeliveryCardModal" tabindex="-1" aria-labelledby="itemDeliveryCardModalTitle" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="itemDeliveryCardModalTitle"><i class="bi bi-credit-card me-2"></i>绑定自动发货卡券</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+        </div>
+        <div class="modal-body">
+          <label for="itemDeliveryCardSelect" class="form-label">卡券</label>
+          <select class="form-select" id="itemDeliveryCardSelect"></select>
+          <div class="form-text">绑定后，此商品的订单会直接使用该卡券自动发货，不再依赖关键词发货规则。</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+          <button type="button" class="btn btn-primary" onclick="saveItemDeliveryCardBinding()"><i class="bi bi-check-lg me-1"></i>保存绑定</button>
         </div>
       </div>
     </div>

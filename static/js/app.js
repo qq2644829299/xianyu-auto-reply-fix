@@ -11875,6 +11875,56 @@ async function toggleItemMultiQuantityDelivery(cookieId, itemId, multiQuantityDe
     }
 }
 
+let itemDeliveryCardBinding = null;
+
+async function bindItemDeliveryCard(cookieId, itemId, currentCardId = null) {
+    try {
+        const response = await fetch(`${apiBase}/cards`, { headers: { 'Authorization': `Bearer ${authToken}` } });
+        if (!response.ok) throw new Error('获取卡券列表失败');
+        const data = await response.json();
+        const cards = data.cards || data || [];
+        if (!cards.length) {
+            showToast('请先在卡券管理中创建卡券', 'warning');
+            return;
+        }
+        itemDeliveryCardBinding = { cookieId, itemId };
+        const select = document.getElementById('itemDeliveryCardSelect');
+        select.innerHTML = '<option value="">不绑定（关闭此商品的自动发货）</option>' + cards.map(card => {
+            const state = card.enabled ? '' : '（已停用，无法自动发货）';
+            return `<option value="${Number(card.id)}">${escapeHtml(card.name)}${state}</option>`;
+        }).join('');
+        select.value = currentCardId ? String(currentCardId) : '';
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('itemDeliveryCardModal')).show();
+    } catch (error) {
+        console.error('加载自动发货卡券失败:', error);
+        showToast(`加载卡券失败: ${error.message}`, 'danger');
+    }
+}
+
+async function saveItemDeliveryCardBinding() {
+    if (!itemDeliveryCardBinding) return;
+    const { cookieId, itemId } = itemDeliveryCardBinding;
+    const select = document.getElementById('itemDeliveryCardSelect');
+    const cardId = select.value ? Number.parseInt(select.value, 10) : null;
+    try {
+        const updateResponse = await fetch(`${apiBase}/items/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/delivery-card`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+            body: JSON.stringify({ card_id: cardId })
+        });
+        if (!updateResponse.ok) {
+            const error = await updateResponse.json().catch(() => ({}));
+            throw new Error(error.detail || '保存失败');
+        }
+        showToast(cardId ? '自动发货卡券已绑定' : '已解除自动发货卡券', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('itemDeliveryCardModal'))?.hide();
+        await refreshItemsData();
+    } catch (error) {
+        console.error('绑定自动发货卡券失败:', error);
+        showToast(`绑定失败: ${error.message}`, 'danger');
+    }
+}
+
 // 加载商品列表
 async function loadItems() {
     try {
@@ -12090,7 +12140,7 @@ function displayCurrentPageItems() {
     const tbody = document.getElementById('itemsTableBody');
 
     if (!filteredItemsData || filteredItemsData.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted">暂无商品数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted">暂无商品数据</td></tr>';
         resetItemsSelection();
         return;
     }
@@ -12126,6 +12176,10 @@ function displayCurrentPageItems() {
             '<span class="badge bg-success">已开启</span>' :
             '<span class="badge bg-secondary">已关闭</span>';
 
+        const boundCardDisplay = item.delivery_card_id
+            ? `<span class="badge ${item.delivery_card_enabled === false ? 'bg-danger' : 'bg-primary'}" title="${escapeHtml(item.delivery_card_name || '卡券不可用')}">${escapeHtml(item.delivery_card_name || '卡券不可用')}</span>`
+            : '<span class="text-muted">未绑定</span>';
+
         return `
             <tr>
             <td>
@@ -12141,6 +12195,7 @@ function displayCurrentPageItems() {
             <td>${escapeHtml(item.item_price || '未设置')}</td>
             <td>${multiSpecDisplay}</td>
             <td>${multiQuantityDeliveryDisplay}</td>
+            <td>${boundCardDisplay}</td>
             <td>${formatDateTime(item.updated_at)}</td>
             <td>
                 <div class="btn-group" role="group">
@@ -12149,6 +12204,9 @@ function displayCurrentPageItems() {
                 </button>
                 <button class="btn btn-sm btn-outline-danger" onclick="deleteItem('${escapeHtml(item.cookie_id)}', '${escapeHtml(item.item_id)}', '${escapeHtml(item.item_title || item.item_id)}')" title="删除">
                     <i class="bi bi-trash"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-primary" onclick="bindItemDeliveryCard('${escapeHtml(item.cookie_id)}', '${escapeHtml(item.item_id)}', ${item.delivery_card_id ? Number(item.delivery_card_id) : 'null'})" title="绑定自动发货卡券">
+                    <i class="bi bi-credit-card"></i>
                 </button>
                 <button class="btn btn-sm ${isMultiSpec ? 'btn-warning' : 'btn-success'}" onclick="toggleItemMultiSpec('${escapeHtml(item.cookie_id)}', '${escapeHtml(item.item_id)}', ${!isMultiSpec})" title="${isMultiSpec ? '关闭多规格' : '开启多规格'}">
                     <i class="bi ${isMultiSpec ? 'bi-toggle-on' : 'bi-toggle-off'}"></i>

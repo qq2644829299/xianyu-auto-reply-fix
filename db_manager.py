@@ -629,6 +629,7 @@ class DBManager:
                 item_price TEXT,
                 item_detail TEXT,
                 is_multi_spec BOOLEAN DEFAULT FALSE,
+                delivery_card_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE,
@@ -644,6 +645,14 @@ class DBManager:
                 logger.info("正在为 item_info 表添加 multi_quantity_delivery 列...")
                 self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN multi_quantity_delivery BOOLEAN DEFAULT FALSE")
                 logger.info("item_info 表 multi_quantity_delivery 列添加完成")
+
+            # 商品直接绑定的自动发货卡券。保留旧的关键词规则，供已配置的商品继续使用。
+            try:
+                self._execute_sql(cursor, "SELECT delivery_card_id FROM item_info LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("正在为 item_info 表添加 delivery_card_id 列...")
+                self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN delivery_card_id INTEGER")
+                logger.info("item_info 表 delivery_card_id 列添加完成")
 
             # 创建自动发货规则表
             cursor.execute('''
@@ -1749,6 +1758,12 @@ Cookie数量: {cookie_count}
                     # 多数量发货字段不存在，需要添加
                     self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN multi_quantity_delivery BOOLEAN DEFAULT FALSE")
                     logger.info("为item_info表添加多数量发货字段")
+
+                try:
+                    self._execute_sql(cursor, "SELECT delivery_card_id FROM item_info LIMIT 1")
+                except sqlite3.OperationalError:
+                    self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN delivery_card_id INTEGER")
+                    logger.info("为item_info表添加自动发货卡券绑定字段")
 
                 # 处理keywords表的唯一约束问题
                 # 由于SQLite不支持直接修改约束，我们需要重建表
@@ -6780,6 +6795,43 @@ Cookie数量: {cookie_count}
         except Exception as e:
             logger.error(f"获取商品多数量发货状态失败: {e}")
             return False
+
+    def update_item_delivery_card(self, cookie_id: str, item_id: str, card_id: Optional[int]) -> bool:
+        """绑定或解除商品的自动发货卡券。"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                UPDATE item_info
+                SET delivery_card_id = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE cookie_id = ? AND item_id = ?
+                ''', (card_id, cookie_id, item_id))
+                if cursor.rowcount <= 0:
+                    return False
+                self.conn.commit()
+                logger.info(f"更新商品自动发货卡券成功: {item_id} -> {card_id}")
+                return True
+        except Exception as e:
+            logger.error(f"更新商品自动发货卡券失败: {e}")
+            self.conn.rollback()
+            return False
+
+    def get_item_delivery_card(self, cookie_id: str, item_id: str, user_id: int = None) -> Optional[Dict]:
+        """返回商品已绑定且归属当前用户的卡券，未绑定时返回 None。"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                SELECT delivery_card_id FROM item_info
+                WHERE cookie_id = ? AND item_id = ?
+                ''', (cookie_id, item_id))
+                row = cursor.fetchone()
+                if not row or row[0] is None:
+                    return None
+                return self.get_card_by_id(int(row[0]), user_id=user_id)
+        except Exception as e:
+            logger.error(f"获取商品绑定卡券失败: {e}")
+            return None
 
     def get_items_by_cookie(self, cookie_id: str) -> List[Dict]:
         """获取指定Cookie的所有商品信息

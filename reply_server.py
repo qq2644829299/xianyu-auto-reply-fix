@@ -10199,6 +10199,13 @@ def get_all_items(current_user: Dict[str, Any] = Depends(get_current_user)):
         all_items = []
         for cookie_id in user_cookies.keys():
             items = db_manager.get_items_by_cookie(cookie_id)
+            for item in items:
+                card_id = item.get('delivery_card_id')
+                if card_id:
+                    card = db_manager.get_card_by_id(card_id, user_id)
+                    # 已删除或不属于当前用户的卡券不会暴露给页面，也不会继续自动发货。
+                    item['delivery_card_name'] = card.get('name') if card else None
+                    item['delivery_card_enabled'] = card.get('enabled') if card else False
             all_items.extend(items)
 
         return {"items": all_items}
@@ -11140,6 +11147,12 @@ def get_items_by_cookie(cookie_id: str, current_user: Dict[str, Any] = Depends(g
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
         items = db_manager.get_items_by_cookie(cookie_id)
+        for item in items:
+            card_id = item.get('delivery_card_id')
+            if card_id:
+                card = db_manager.get_card_by_id(card_id, user_id)
+                item['delivery_card_name'] = card.get('name') if card else None
+                item['delivery_card_enabled'] = card.get('enabled') if card else False
         return {"items": items}
     except HTTPException:
         raise
@@ -11173,6 +11186,10 @@ class ItemDetailUpdate(BaseModel):
     item_detail: str
 
 
+class ItemDeliveryCardUpdate(BaseModel):
+    card_id: Optional[int] = None
+
+
 @app.put("/items/{cookie_id}/{item_id}")
 def update_item_detail(
     cookie_id: str,
@@ -11199,6 +11216,32 @@ def update_item_detail(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新商品详情失败: {str(e)}")
+
+
+@app.put("/items/{cookie_id}/{item_id}/delivery-card")
+def update_item_delivery_card(
+    cookie_id: str,
+    item_id: str,
+    update_data: ItemDeliveryCardUpdate,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """直接为商品绑定自动发货卡券；传空卡券即可解除绑定。"""
+    try:
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        if cookie_id not in db_manager.get_all_cookies(user_id):
+            raise HTTPException(status_code=403, detail="无权限操作该账号")
+        if not db_manager.get_item_info(cookie_id, item_id):
+            raise HTTPException(status_code=404, detail="商品不存在")
+        if update_data.card_id is not None and not db_manager.get_card_by_id(update_data.card_id, user_id):
+            raise HTTPException(status_code=404, detail="卡券不存在或无权使用")
+        if not db_manager.update_item_delivery_card(cookie_id, item_id, update_data.card_id):
+            raise HTTPException(status_code=400, detail="保存失败")
+        return {"message": "已解除自动发货卡券" if update_data.card_id is None else "自动发货卡券已绑定"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"更新自动发货卡券失败: {str(e)}")
 
 
 @app.delete("/items/{cookie_id}/{item_id}")

@@ -11941,7 +11941,11 @@ class XianyuLive:
                 spec_name_2 = ''
                 spec_value_2 = ''
                 order_spec_mode = _get_order_spec_mode()
-            elif order_spec_mode == 'no_spec' and item_config_multi_spec:
+            elif (
+                order_spec_mode == 'no_spec'
+                and item_config_multi_spec
+                and not db_manager.get_item_delivery_card(self.cookie_id, item_id, user_id=self.user_id)
+            ):
                 block_reason = (
                     f"商品已开启规格匹配，但订单未解析到有效规格信息，已阻断自动发货: "
                     f"order_id={order_id or 'unknown'}, item_id={item_id or 'unknown'}"
@@ -11955,7 +11959,36 @@ class XianyuLive:
             )
 
             delivery_rules = []
-            if order_spec_mode == 'two_spec':
+            bound_card = db_manager.get_item_delivery_card(self.cookie_id, item_id, user_id=self.user_id)
+            if bound_card:
+                if not bound_card.get('enabled'):
+                    return build_result(False, error="商品绑定的卡券已停用，已阻断自动发货", match_mode_value='blocked_bound_card_disabled')
+                delivery_rules = [{
+                    'id': None,
+                    'keyword': item_info.get('item_title') if item_info else (item_title or item_id),
+                    'card_id': bound_card['id'],
+                    'delivery_count': 1,
+                    'enabled': True,
+                    'description': '商品直接绑定卡券',
+                    'delivery_times': 0,
+                    'card_name': bound_card['name'],
+                    'card_type': bound_card['type'],
+                    'api_config': bound_card.get('api_config'),
+                    'text_content': bound_card.get('text_content'),
+                    'data_content': bound_card.get('data_content'),
+                    'image_url': bound_card.get('image_url'),
+                    'card_enabled': bound_card.get('enabled'),
+                    'card_description': bound_card.get('description'),
+                    'card_delay_seconds': bound_card.get('delay_seconds', 0),
+                    'spec_name': bound_card.get('spec_name'),
+                    'spec_value': bound_card.get('spec_value'),
+                    'spec_name_2': bound_card.get('spec_name_2'),
+                    'spec_value_2': bound_card.get('spec_value_2'),
+                }]
+                match_mode = 'item_card_binding'
+                match_mode_context = match_mode
+                logger.info(f"商品已直接绑定卡券，跳过关键词规则匹配: item_id={item_id}, card_id={bound_card['id']}")
+            elif order_spec_mode == 'two_spec':
                 match_mode = 'two_spec_exact'
                 match_mode_context = match_mode
                 logger.info(
@@ -12056,7 +12089,8 @@ class XianyuLive:
                 and rule_spec_mode == 'no_spec'
             )
 
-            if rule_spec_mode != order_spec_mode and not allow_one_spec_fallback:
+            is_direct_item_binding = match_mode == 'item_card_binding'
+            if rule_spec_mode != order_spec_mode and not allow_one_spec_fallback and not is_direct_item_binding:
                 block_reason = (
                     f"订单规格模式与命中规则模式不一致，已阻断自动发货: "
                     f"order_spec_mode={order_spec_mode}, rule_spec_mode={rule_spec_mode}, "
@@ -12085,7 +12119,9 @@ class XianyuLive:
             #     logger.warning(f"跳过保存商品信息：缺少商品标题 - {item_id}")
 
             # 详细的匹配结果日志
-            if order_spec_mode == 'two_spec':
+            if is_direct_item_binding:
+                logger.info(f"✅ 商品直接绑定卡券发货: 商品ID={item_id} -> {rule['card_name']} ({rule['card_type']})")
+            elif order_spec_mode == 'two_spec':
                 rule_spec_info = f"{rule['spec_name']}:{rule['spec_value']}, {rule['spec_name_2']}:{rule['spec_value_2']}"
                 order_spec_info = f"{spec_name}:{spec_value}, {spec_name_2}:{spec_value_2}"
                 logger.info(f"🎯 精确匹配两组规格发货规则: {rule['keyword']} -> {rule['card_name']} [{rule_spec_info}]")
