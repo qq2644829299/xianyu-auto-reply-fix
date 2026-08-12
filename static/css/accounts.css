@@ -28,15 +28,7 @@
 }
 
 .status-slider:after {
-  content: "关";
-  position: absolute;
-  right: 7px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1;
+  content: none;
 }
 
 .status-slider:before {
@@ -56,18 +48,12 @@ input:checked + .status-slider {
   border-color: #409eff;
 }
 
-input:checked + .status-slider:after {
-  content: "开";
-  right: auto;
-  left: 7px;
-}
-
 input:checked + .status-slider:before {
   transform: translateX(22px);
 }
 
 .status-badge {
-  display: inline-flex;
+  display: none;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
