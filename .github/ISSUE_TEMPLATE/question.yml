@@ -1,0 +1,57 @@
+name: 使用问题
+description: 提问部署、配置、使用方式或兼容性问题
+title: "[使用问题] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        使用问题建议先查看 README 和已有 Issues；如果仍未解决，再按下面格式补充信息。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      placeholder: 例如 v1.8.4
+
+  - type: dropdown
+    id: deploy_method
+    attributes:
+      label: 部署方式
+      options:
+        - Docker Compose
+        - Docker
+        - 源码运行
+        - 暂未部署
+        - 其他
+
+  - type: dropdown
+    id: operating_system
+    attributes:
+      label: 系统环境
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - 其他
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 具体问题
+      description: 请把你想问的内容写完整，尽量带上背景
+      placeholder: 例如：Linux 上源码部署时 Playwright 依赖应该如何安装？
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: 你已经尝试过什么
+      placeholder: 例如：已经按 README 执行 docker compose up -d --build，但容器启动失败
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志或截图
+      description: 如有报错，请贴脱敏后的关键日志
+      render: shell

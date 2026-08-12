@@ -1,0 +1,88 @@
+name: Bug 反馈
+description: 反馈程序异常、功能失效或行为回归
+title: "[Bug] "
+labels:
+  - 缺陷
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请尽量提供可复现的信息，并对日志、Cookie、账号等敏感内容先做脱敏处理。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，确认不是重复问题
+          required: true
+        - label: 我已对日志中的 Cookie、账号、密码、Token 等敏感信息做脱敏处理
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      placeholder: 例如 v1.8.4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy_method
+    attributes:
+      label: 部署方式
+      options:
+        - Docker Compose
+        - Docker
+        - 源码运行
+        - 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating_system
+    attributes:
+      label: 系统环境
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请说明实际表现和预期行为
+      placeholder: 例如：点击某个按钮后页面报错，预期应该正常完成操作
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开...
+        2. 点击...
+        3. 执行...
+        4. 出现...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志或报错信息
+      description: 请贴脱敏后的关键日志、报错截图说明或控制台输出
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 可补充代理、浏览器模式、账号数量、是否近期升级版本等信息

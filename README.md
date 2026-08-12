@@ -1,0 +1,226 @@
+# 🐟 闲鱼管理系统
+
+[![GitHub Stars](https://img.shields.io/github/stars/GuDong2003/xianyu-auto-reply-fix?style=flat&logo=github)](https://github.com/GuDong2003/xianyu-auto-reply-fix/stargazers)
+[![Latest Release](https://img.shields.io/github/v/release/GuDong2003/xianyu-auto-reply-fix?logo=github)](https://github.com/GuDong2003/xianyu-auto-reply-fix/releases/latest)
+[![Docker Image](https://github.com/GuDong2003/xianyu-auto-reply-fix/actions/workflows/docker-image.yml/badge.svg?branch=main)](https://github.com/GuDong2003/xianyu-auto-reply-fix/actions/workflows/docker-image.yml)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-源码构建-blue?logo=docker)](#-快速开始)
+[![Python](https://img.shields.io/badge/Python-3.11+-green?logo=python)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![Usage](https://img.shields.io/badge/Usage-仅供学习-red.svg)](LICENSE)
+
+## 📋 项目概述
+
+一个基于 **FastAPI + SQLite + Playwright** 的闲鱼管理系统，支持多用户、多账号管理、关键词回复、AI 自动回复、自动发货、商品管理、日志监控和 Docker 一键部署。
+
+> **⚠️ 重要提示：本项目采用 AGPL-3.0 开源协议，仅供学习研究使用，请勿用于违法违规场景。使用前请仔细阅读[版权声明](#️-版权声明与使用条款)。**
+
+## ✨ 核心特性
+
+- **多用户系统**：支持注册登录、邮箱验证、图形验证码、权限控制和用户数据隔离。
+- **多账号管理**：每个用户可管理多个闲鱼账号，支持独立启停、状态查看和 Cookie 维护。
+- **智能回复**：支持关键词回复、默认回复、指定商品回复、图片关键词和 AI 自动回复。
+- **自动发货**：支持文本、批量数据、API、图片等发货方式，并提供防重复处理能力。
+- **商品管理**：自动收集商品信息，支持商品详情、规格配置和数据去重。
+- **运营协同**：提供订单管理、通知渠道、消息通知、在线客服等后台运营能力。
+- **监控维护**：支持实时日志、健康检查、安全统计、系统统计和日志文件轮转。
+- **容器化部署**：支持本地运行、Docker Compose 和多架构构建。
+
+## 🔐 部署前必读
+
+- `docker-compose.yml` 中的默认管理员密码和 JWT 密钥仅用于本地体验，正式或联网部署前必须覆盖。
+- 不要把 `5900`（VNC）和 `6080`（noVNC）直接暴露到公网；远程访问应配合防火墙、访问控制和可信网络。
+- 对外提供 Web 管理界面时，请使用 HTTPS 反向代理，并限制管理端访问来源。
+- `data/`、`logs/`、`backups/` 和 `global_config.yml` 可能包含运行数据或敏感配置，不要提交到 Git，也不要随 Issue/PR 上传。
+- Cookie、Token、账号密码和数据库凭据均属于敏感信息；公开日志和截图前请先脱敏。
+
+在仓库根目录创建 `.env`，至少覆盖以下配置：
+
+```dotenv
+ADMIN_PASSWORD=replace-with-a-strong-password
+JWT_SECRET_KEY=replace-with-a-long-random-string
+```
+
+更多安全边界和漏洞反馈方式见 [Security Policy](SECURITY.md)。
+
+## 🚀 快速开始
+
+### Docker Compose（推荐）
+
+```bash
+git clone https://github.com/GuDong2003/xianyu-auto-reply-fix.git
+cd xianyu-auto-reply-fix
+docker compose up -d
+```
+
+仅在修改了 `Dockerfile` 或依赖文件、需要本地重新构建镜像时，使用 `docker compose up -d --build`。
+
+默认访问：
+
+- Web 管理界面：`http://localhost:9000`
+- API 文档：`http://localhost:9000/docs`
+- 健康检查：`http://localhost:9000/health`
+
+首次初始化的默认管理员账号为 `admin` / `admin123`。该默认值仅用于本地初始化，请在首次登录后立即修改，并确保 `.env` 中已设置独立的强密码和 JWT 密钥。
+
+默认持久化目录为 `data/`、`logs/` 和 `backups/`；升级或重建容器前请先备份。
+
+### 本地运行
+
+```bash
+git clone https://github.com/GuDong2003/xianyu-auto-reply-fix.git
+cd xianyu-auto-reply-fix
+
+python -m venv venv
+source venv/bin/activate  # Windows 使用 venv\Scripts\activate
+
+pip install --upgrade pip
+pip install -r requirements.txt
+playwright install chromium
+
+python Start.py
+```
+
+默认访问：`http://localhost:8090`
+
+> 更多部署方式、Windows 脚本、国内 Docker Compose 配置、多架构构建和访问地址见 [部署与运行指南](docs/deployment.md)。
+
+## 🤖 AI 回复配置
+
+AI 回复使用统一的 `model_name` / `api_key` / `base_url` / `api_type` 配置模式，支持 OpenAI-compatible、OpenAI Responses、DashScope、Gemini、Anthropic、Azure OpenAI 等接口。
+
+第三方 OpenAI-compatible 服务可通过自定义 `base_url` 接入；详细配置和新增 Provider 说明见 [配置说明](docs/configuration.md)。
+
+## 📖 文档导航
+
+| 文档 | 内容 |
+| --- | --- |
+| [部署与运行指南](docs/deployment.md) | Docker、本地运行、环境要求、多架构、访问地址 |
+| [配置说明](docs/configuration.md) | 环境变量、`global_config.yml`、AI 回复配置、运行期目录 |
+| [使用指南](docs/usage.md) | 用户注册、添加账号、自动回复、自动发货 |
+| [常见问题](docs/faq.md) | 端口、数据库、WebSocket、Playwright、Docker、Windows 问题 |
+| [发版与热更新说明](docs/release.md) | 热更新清单、版本号、`release_precheck.py`、Release 流程 |
+| [安全政策](SECURITY.md) | 安全问题反馈和处理方式 |
+
+## 🏗️ 技术架构
+
+### 核心技术栈
+
+- **后端框架**：FastAPI + Uvicorn + Python 3.11+ 异步编程
+- **数据库**：SQLite 3 + 多用户数据隔离 + 自动迁移
+- **前端**：Bootstrap 5 + Vanilla JavaScript + Chart.js
+- **通信协议**：REST API + WebSocket + SSE
+- **自动化能力**：Playwright + DrissionPage
+- **部署方式**：Docker + Docker Compose + Nginx（可选）
+- **日志系统**：Loguru + 文件轮转 + 实时收集
+
+```text
+┌─────────────────────────────────────────┐
+│       Web 界面 (FastAPI + Static)        │
+│          用户管理 + 功能界面               │
+└───────────────────┬─────────────────────┘
+                    │
+┌───────────────────▼─────────────────────┐
+│             CookieManager               │
+│           多账号任务与状态管理             │
+└───────────────────┬─────────────────────┘
+                    │
+┌───────────────────▼─────────────────────┐
+│          XianyuLive (多实例)             │
+│        WebSocket 连接 + 消息处理          │
+└──────────────┬──────────────┬───────────┘
+               │              │
+┌──────────────▼───────┐ ┌────▼──────────────┐
+│    AIReplyEngine     │ │ FileLogCollector  │
+│     AI 回复与上下文    │ │   实时日志与统计    │
+└──────────────┬───────┘ └────┬──────────────┘
+               │              │
+┌──────────────▼──────────────▼───────────┐
+│              SQLite 数据库               │
+│      用户数据 + 商品信息 + 配置数据         │
+└─────────────────────────────────────────┘
+```
+
+## 📊 监控和维护
+
+- **实时日志**：Web 界面查看实时系统日志。
+- **日志文件**：`logs/` 目录下按日期分割。
+- **日志级别**：支持 DEBUG、INFO、WARNING、ERROR。
+- **健康检查**：访问 `/health` 检查服务状态。
+
+## 🤝 贡献指南
+
+欢迎提交 Issue 和 Pull Request：
+
+1. Fork 项目到自己的 GitHub 账号。
+2. 创建功能分支：`git checkout -b feature/your-feature`。
+3. 提交更改：`git commit -am 'add some feature'`。
+4. 推送分支：`git push origin feature/your-feature`。
+5. 提交 Pull Request。
+
+提交前请注意：
+
+- 建议一个 PR 只解决一个主题；大型重构、依赖升级和部署改造请尽量拆分。
+- 涉及默认行为或兼容性的变更，应说明影响范围、迁移方式和回滚方案，并尽量保留已有使用路径。
+- 新功能和缺陷修复应补充相应测试；用户可见行为变化请同步更新文档。
+- 不要提交真实 Cookie、Token、账号密码、数据库、日志或其他敏感信息。
+- 安全漏洞不要通过公开 Issue 披露，请遵循 [Security Policy](SECURITY.md)。
+
+贡献前建议先查看 [Issues](https://github.com/GuDong2003/xianyu-auto-reply-fix/issues) 和现有 Pull Request，避免重复工作。
+
+## ❓ 常见问题
+
+### 端口被占用怎么办？
+
+Docker Compose 修改 `docker-compose.yml` / `docker-compose-cn.yml` 的端口映射；本地运行可修改 `API_PORT` 或 `global_config.yml`。
+
+### Playwright 浏览器缺失怎么办？
+
+```bash
+source venv/bin/activate
+playwright install chromium
+```
+
+### Docker 容器启动失败怎么办？
+
+```bash
+docker compose logs -f
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
+
+更多问题见 [常见问题](docs/faq.md)。
+
+## 🧸 特别鸣谢
+
+### 开源项目参考（排名不分先后）
+
+- **[myfish](https://github.com/Kaguya233qwq/myfish)** - 提供了扫码登录的实现思路
+- **[XianYuApis](https://github.com/cv-cat/XianYuApis)** - 提供了闲鱼 API 接口的技术参考
+- **[XianyuAutoAgent](https://github.com/shaxiu/XianyuAutoAgent)** - 提供了自动化处理的实现思路
+- **[xianyu-auto-reply](https://github.com/zhinianboke/xianyu-auto-reply)** - 提供了基础框架与初始实现参考
+
+### 开发者支持（贡献不分先后）
+
+- **[syunnrai123](https://github.com/syunnrai123)**、**[1205747671](https://github.com/1205747671)** - 为当前项目的滑块处理方案提供思路与参考
+- **[Mangor2021](https://github.com/Mangor2021)**、**[3281341052](https://github.com/3281341052)**、**[GDWhisper](https://github.com/GDWhisper)**、**[82762294](https://github.com/82762294)**、**[iidamie](https://github.com/iidamie)**、**[Roverlo](https://github.com/Roverlo)** - 为项目开发与改进提供实际贡献
+
+## ⚖️ 版权声明与使用条款
+
+本项目基于原项目整理和修复，采用 **GNU Affero General Public License v3.0（AGPL-3.0）** 开源协议。项目定位为学习与研究使用，请勿用于任何违法违规场景。
+
+使用、修改、分发或通过网络提供服务时，应遵守 AGPL-3.0 的源码提供、版权声明保留等要求。使用者需自行承担部署、配置和运行风险，并确保实际用途符合当地法律法规和平台规则。
+
+本项目是社区维护的非官方项目，与闲鱼、阿里巴巴及其关联公司无隶属、授权、认可或合作关系。平台接口、风控规则和页面结构可能随时变化，由此导致的功能中断不构成维护者承诺。
+
+本项目按“现状”提供，不提供任何明示或暗示的保证；因使用本项目产生的风险、损失或责任，由使用者自行承担。
+
+## Star History
+
+<a href="https://www.star-history.com/#GuDong2003/xianyu-auto-reply-fix&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=GuDong2003/xianyu-auto-reply-fix&type=Date&theme=dark&sealed_token=P3o8nIGCB4Y4KGlfZogILPfgp0REbjEcS8s8BScY9WUcxbgx9b9JK_2HPPn7pF39I703tgOcIWPx-4RI5Zfsd0VBVLRc6AIKpKgDOekOySsw7T5-BWZHBA" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=GuDong2003/xianyu-auto-reply-fix&type=Date&sealed_token=P3o8nIGCB4Y4KGlfZogILPfgp0REbjEcS8s8BScY9WUcxbgx9b9JK_2HPPn7pF39I703tgOcIWPx-4RI5Zfsd0VBVLRc6AIKpKgDOekOySsw7T5-BWZHBA" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=GuDong2003/xianyu-auto-reply-fix&type=Date&sealed_token=P3o8nIGCB4Y4KGlfZogILPfgp0REbjEcS8s8BScY9WUcxbgx9b9JK_2HPPn7pF39I703tgOcIWPx-4RI5Zfsd0VBVLRc6AIKpKgDOekOySsw7T5-BWZHBA" />
+  </picture>
+</a>

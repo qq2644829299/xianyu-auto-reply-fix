@@ -1,0 +1,15 @@
+:root { --primary-color:#2563eb; --ink:#172033; --muted:#667085; }
+body { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; background:#f5f7fb; position:relative; }
+body::before { content:""; position:fixed; inset:0 0 auto; height:280px; background:#172554; z-index:-1; }
+.login-container { max-width:420px; border:1px solid #e6ebf2; border-radius:10px; box-shadow:0 18px 45px rgba(15,23,42,.14); }
+.login-header { background:#172554; padding:28px 30px 24px; text-align:left; }
+.login-header img { height:40px !important; margin-bottom:18px !important; }
+.login-header h2 { font-size:21px; font-weight:650; }
+.login-header p { font-size:13px; margin-top:6px; color:#cbd5e1; }
+.login-body { padding:28px 30px 30px; }
+.form-control { border:1px solid #d8e0eb; border-radius:6px; padding:10px 13px; font-size:14px; }
+.form-control:focus { border-color:#7aa7ee; box-shadow:0 0 0 3px rgba(37,99,235,.12); }
+.btn-login { border-radius:6px; padding:10px; font-size:14px; background:#2563eb; }
+.btn-login:hover { background:#1d4ed8; transform:none; }
+.input-group { margin-bottom:16px; }
+.login-tabs .btn { font-size:12px; padding:8px 5px; }

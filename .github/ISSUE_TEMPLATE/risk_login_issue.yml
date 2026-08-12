@@ -1,0 +1,129 @@
+name: 风控 / 登录问题
+description: 反馈滑块、人脸、二维码、Cookie、Session、Token、风控相关问题
+title: "[风控/登录] "
+labels:
+  - 缺陷
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这类问题通常需要版本号、部署环境、链路描述和脱敏日志。请尽量把触发前后的关键日志一并提供。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，确认不是重复问题
+          required: true
+        - label: 我已对日志中的 Cookie、账号、密码、Token 等敏感信息做脱敏处理
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      placeholder: 例如 v1.8.4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy_method
+    attributes:
+      label: 部署方式
+      options:
+        - Docker Compose
+        - Docker
+        - 源码运行
+        - 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating_system
+    attributes:
+      label: 系统环境
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: 问题类型
+      options:
+        - 滑块验证
+        - 人脸验证
+        - 二维码验证
+        - Cookie 刷新
+        - Session 失效
+        - Token 刷新失败
+        - 账密登录
+        - 扫码登录
+        - 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: browser_mode
+    attributes:
+      label: 浏览器模式
+      options:
+        - 无头
+        - 有头
+        - 不确定
+    validations:
+      required: true
+
+  - type: dropdown
+    id: password_configured
+    attributes:
+      label: 是否已配置账密
+      options:
+        - 是
+        - 否
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请说明触发场景、当前现象和你的预期
+      placeholder: 例如：扫码拿到 Cookie 后，刷新 Token 时反复进入滑块 / Session 失效循环
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: 触发链路
+      description: 尽量按顺序描述，例如 扫码登录 -> 换真实 Cookie -> 刷新 Token -> 触发滑块
+      placeholder: |
+        例如：
+        1. 点击手动刷新 Cookie
+        2. 触发账密登录
+        3. 滑块通过
+        4. 返回登录成功，但后续刷新失败
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 脱敏日志
+      description: 请提供关键日志片段，尤其是触发前后、报错点和最终结果
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 可补充代理、IP 环境、是否导入 Cookie、是否能在浏览器里手动成功等信息

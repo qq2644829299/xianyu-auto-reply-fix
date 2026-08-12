@@ -1,0 +1,1790 @@
+/* ================================
+   【账号管理菜单】相关样式
+   ================================ */
+.status-toggle {
+  position: relative;
+  display: inline-block;
+  width: 62px;
+  height: 30px;
+}
+
+.status-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.status-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #6b7372;
+  border: 2px solid #4e5755;
+  transition: .18s ease;
+  border-radius: 24px;
+}
+
+.status-slider:after {
+  content: "关";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.status-slider:before {
+  position: absolute;
+  content: "";
+  height: 22px;
+  width: 22px;
+  left: 2px;
+  bottom: 2px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+}
+
+input:checked + .status-slider {
+  background-color: #087f5b;
+  border-color: #087f5b;
+}
+
+input:checked + .status-slider:after {
+  content: "开";
+  right: auto;
+  left: 9px;
+}
+
+input:checked + .status-slider:before {
+  transform: translateX(32px);
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  min-width: 58px;
+  height: 1.75rem;
+}
+
+.status-badge.enabled {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.status-badge.disabled {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.account-status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-width: 92px;
+}
+
+.account-status-main {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.account-status-cell .account-status-note-badge {
+  max-width: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
+.account-status-note-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #b45309;
+  border: 1px solid #fdba74;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.account-status-note-badge .bi {
+  font-size: 0.8rem;
+}
+
+.manual-intervention-alert {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin: 0.85rem 0;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid rgba(239, 68, 68, 0.26);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at top left, rgba(239, 68, 68, 0.13), transparent 36%),
+    linear-gradient(135deg, rgba(255, 247, 237, 0.98), rgba(255, 255, 255, 0.98));
+  box-shadow: 0 16px 30px -24px rgba(127, 29, 29, 0.42);
+}
+
+.manual-intervention-alert.is-compact {
+  margin: 0 0 0.85rem;
+}
+
+.manual-intervention-alert-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+  font-size: 1rem;
+}
+
+.manual-intervention-alert-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.manual-intervention-alert-title {
+  color: #991b1b;
+  font-size: 0.92rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.manual-intervention-alert-detail {
+  margin-top: 0.24rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.manual-intervention-alert-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+  flex: 0 0 auto;
+  padding: 0.52rem 0.75rem;
+  border-radius: 10px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+  box-shadow: 0 10px 18px -14px rgba(220, 38, 38, 0.72);
+  transition: transform 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.manual-intervention-alert-action:hover,
+.manual-intervention-alert-action:focus {
+  background: #b91c1c;
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 16px 26px -18px rgba(220, 38, 38, 0.8);
+}
+
+#cookieTable thead th {
+  white-space: nowrap;
+}
+
+#cookieTable thead th:nth-child(5) {
+  min-width: 4.5rem;
+}
+
+.account-row.disabled {
+  opacity: 0.6;
+  background-color: #f9fafb;
+}
+
+.account-row.disabled .cookie-value {
+  background-color: #f3f4f6;
+}
+
+.account-actions-cell {
+  min-width: 340px;
+}
+
+.account-actions-toolbar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.35rem;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.1rem 0;
+  scrollbar-width: thin;
+}
+
+.account-actions-toolbar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.account-action-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.18rem;
+  padding: 0.18rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.65rem;
+  background: #f8fafc;
+}
+
+.account-action-group-label,
+.account-action-btn .action-text {
+  display: none;
+}
+
+.account-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 0.5rem !important;
+  margin-left: 0 !important;
+  padding: 0;
+  font-size: 0.78rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.account-action-btn .bi {
+  font-size: 0.95rem;
+}
+
+.account-action-group-danger {
+  margin-left: auto;
+}
+
+.account-action-delete {
+  min-width: 28px;
+}
+
+.account-action-group-basic {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+.account-action-group-reply {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.account-action-group-item {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.account-action-group-flower {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.account-action-group-danger {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.account-actions-group {
+  display: flex !important;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.25rem;
+}
+
+.account-actions-group > .btn {
+  border-radius: 0.375rem !important;
+  margin-left: 0 !important;
+}
+
+/* 关键词管理界面的状态提示 */
+.account-badge .badge.bg-warning {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
+.disabled-account-notice {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  color: #92400e;
+}
+
+.disabled-account-notice .bi {
+  color: #f59e0b;
+}
+
+/* 扫码登录按钮特殊样式 */
+.qr-login-btn {
+  background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+  border: none;
+  box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.qr-login-btn small.opacity-75 {
+  color: rgba(255, 255, 255, 0.92);
+  opacity: 0.92 !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+}
+
+.qr-login-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4);
+  background: linear-gradient(135deg, #218838 0%, #1ea085 100%);
+}
+
+.qr-login-btn:active {
+  transform: translateY(0);
+}
+
+.qr-login-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+  transition: left 0.5s;
+}
+
+.qr-login-btn:hover::before {
+  left: 100%;
+}
+
+/* 二维码容器样式 */
+.qr-code-wrapper {
+  border: 3px solid #28a745;
+  box-shadow: 0 4px 15px rgba(40, 167, 69, 0.2);
+  transition: all 0.3s ease;
+}
+
+.qr-code-wrapper:hover {
+  box-shadow: 0 6px 20px rgba(40, 167, 69, 0.3);
+}
+
+/* 步骤指引样式 */
+.step-item {
+  text-align: center;
+}
+
+.step-number {
+  font-weight: bold;
+  font-size: 14px;
+  box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+}
+
+/* 手动输入按钮样式 */
+.manual-input-btn {
+  transition: all 0.3s ease;
+}
+
+.manual-input-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(108, 117, 125, 0.2);
+}
+
+/* 等待提示样式 */
+.bg-light-warning {
+  background-color: #fff3cd !important;
+}
+
+.qr-loading-tip {
+  animation: pulse-warning 2s infinite;
+}
+
+@keyframes pulse-warning {
+  0% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.8;
+  }
+}
+
+/* 账号保活诊断 */
+.about-diagnostics-card {
+  width: 100%;
+  margin: 1.5rem 0 0;
+}
+
+.account-diagnostics-card .card-header .text-muted {
+  color: rgba(255, 255, 255, 0.78) !important;
+}
+
+.account-diagnostics-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.account-diagnostics-picker {
+  min-width: 220px;
+  max-width: 300px;
+}
+
+.account-diagnostics-picker .form-label {
+  margin-bottom: 0.4rem;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.account-diagnostics-card .card-header .form-select {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  box-shadow: none;
+}
+
+.account-diagnostics-card .card-header .form-select option {
+  color: #1f2937;
+}
+
+.account-diagnostics-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.account-diagnostics-card .card-header .btn-outline-secondary {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.account-diagnostics-card .card-header .btn-outline-secondary:hover {
+  border-color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.account-diagnostics-card .card-header .btn-primary {
+  background: rgba(255, 255, 255, 0.96);
+  color: #4338ca;
+  border: none;
+}
+
+.account-diagnostics-card .card-header .btn-primary:hover {
+  background: #fff;
+  color: #312e81;
+}
+
+.account-diagnostics-summary {
+  margin-bottom: 1rem;
+}
+
+.about-diagnostics-account-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.account-diagnostics-summary-item {
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.9));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.account-diagnostics-summary-label {
+  margin-bottom: 0.35rem;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-summary-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-color);
+  word-break: break-word;
+}
+
+.account-diagnostics-summary-support {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-layout {
+  display: grid;
+  gap: 1rem;
+}
+
+.about-status-panel,
+.about-history-panel {
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 1rem 1.1rem;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.98));
+}
+
+.account-diagnostics-main-panel {
+  border-color: rgba(99, 102, 241, 0.18);
+  background:
+    radial-gradient(circle at top right, rgba(99, 102, 241, 0.11), transparent 32%),
+    linear-gradient(180deg, rgba(238, 242, 255, 0.92), rgba(255, 255, 255, 0.98) 56%);
+}
+
+.account-diagnostics-history-panel {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.95));
+}
+
+.account-diagnostics-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.account-diagnostics-main-panel .account-diagnostics-section-head {
+  border-bottom-color: rgba(99, 102, 241, 0.16);
+}
+
+.account-diagnostics-main-panel .account-diagnostics-section-title {
+  color: #312e81;
+}
+
+.account-diagnostics-section-title {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--text-color);
+}
+
+.account-diagnostics-section-sub {
+  margin-top: 0.25rem;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-status-shell {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.account-diagnostics-status-note-bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.9rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-left-width: 4px;
+  border-radius: 12px;
+  background: #f8fafc;
+  box-shadow: 0 10px 20px -18px rgba(15, 23, 42, 0.42);
+}
+
+.account-diagnostics-status-note-bar.is-success {
+  border-left-color: #10b981;
+  background: #ecfdf5;
+}
+
+.account-diagnostics-status-note-bar.is-warning {
+  border-left-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.account-diagnostics-status-note-bar.is-danger {
+  border-left-color: #ef4444;
+  background: #fef2f2;
+}
+
+.account-diagnostics-status-note-bar.is-info {
+  border-left-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.account-diagnostics-status-note-title {
+  flex: 0 0 auto;
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: var(--text-color);
+  line-height: 1.25;
+}
+
+.account-diagnostics-status-note-text {
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-vnc-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.82rem 0.95rem;
+  border: 1px solid rgba(14, 165, 233, 0.22);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.14), transparent 38%),
+    linear-gradient(135deg, rgba(240, 249, 255, 0.96), rgba(255, 255, 255, 0.98));
+  box-shadow: 0 14px 28px -24px rgba(15, 23, 42, 0.46);
+}
+
+.account-diagnostics-vnc-copy {
+  min-width: 0;
+}
+
+.account-diagnostics-vnc-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #075985;
+}
+
+.account-diagnostics-vnc-desc {
+  margin-top: 0.25rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-vnc-url {
+  display: inline-flex;
+  max-width: 100%;
+  margin-top: 0.42rem;
+  padding: 0.22rem 0.48rem;
+  border-radius: 8px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #0369a1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.account-diagnostics-vnc-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  padding: 0.58rem 0.9rem;
+  border-radius: 10px;
+  background: #0284c7;
+  color: #fff;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-decoration: none;
+  box-shadow: 0 10px 18px -14px rgba(2, 132, 199, 0.7);
+  transition: transform 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.account-diagnostics-vnc-button:hover,
+.account-diagnostics-vnc-button:focus {
+  background: #0369a1;
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 16px 26px -18px rgba(2, 132, 199, 0.78);
+}
+
+.account-diagnostics-status-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.7rem;
+  align-items: stretch;
+}
+
+.account-diagnostics-status-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(260px, 0.95fr);
+  gap: 0.8rem;
+  align-items: stretch;
+}
+
+.account-diagnostics-status-primary,
+.account-diagnostics-status-sidebar {
+  min-width: 0;
+}
+
+.account-diagnostics-status-sidebar .account-diagnostics-status-item {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.account-diagnostics-status-item {
+  position: relative;
+  overflow: hidden;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--card-bg);
+  box-shadow: 0 14px 28px -24px rgba(15, 23, 42, 0.5);
+}
+
+.account-diagnostics-status-item::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--diagnostics-accent, rgba(148, 163, 184, 0.6));
+}
+
+.account-diagnostics-status-item.is-success {
+  border-color: rgba(16, 185, 129, 0.22);
+}
+
+.account-diagnostics-status-item.is-warning {
+  border-color: rgba(245, 158, 11, 0.22);
+}
+
+.account-diagnostics-status-item.is-danger {
+  border-color: rgba(239, 68, 68, 0.22);
+}
+
+.account-diagnostics-status-item.is-info {
+  border-color: rgba(59, 130, 246, 0.22);
+}
+
+.account-diagnostics-status-item-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.45rem;
+}
+
+.account-diagnostics-status-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+  font-size: 0.88rem;
+}
+
+.account-diagnostics-status-item-label {
+  font-size: 0.79rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-status-item-value {
+  font-size: 1.08rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-color);
+  word-break: break-word;
+}
+
+.account-diagnostics-status-item-note {
+  margin-top: 0.35rem;
+  font-size: 0.81rem;
+  line-height: 1.38;
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-status-item.is-connection {
+  --diagnostics-accent: #3b82f6;
+  background: linear-gradient(135deg, rgba(219, 234, 254, 0.92), rgba(255, 255, 255, 0.98) 52%);
+}
+
+.account-diagnostics-status-item.is-keepalive {
+  --diagnostics-accent: #10b981;
+  background: linear-gradient(135deg, rgba(209, 250, 229, 0.9), rgba(255, 255, 255, 0.98) 52%);
+}
+
+.account-diagnostics-status-item.is-token {
+  --diagnostics-accent: #f59e0b;
+  background: linear-gradient(135deg, rgba(254, 243, 199, 0.92), rgba(255, 255, 255, 0.98) 52%);
+}
+
+.account-diagnostics-status-item.is-readiness {
+  --diagnostics-accent: #6366f1;
+  background: linear-gradient(135deg, rgba(224, 231, 255, 0.92), rgba(255, 255, 255, 0.98) 52%);
+}
+
+.account-diagnostics-status-item.is-connection .account-diagnostics-status-item-icon {
+  background: rgba(59, 130, 246, 0.14);
+  color: #1d4ed8;
+}
+
+.account-diagnostics-status-item.is-keepalive .account-diagnostics-status-item-icon {
+  background: rgba(16, 185, 129, 0.14);
+  color: #0f766e;
+}
+
+.account-diagnostics-status-item.is-token .account-diagnostics-status-item-icon {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+}
+
+.account-diagnostics-status-item.is-readiness .account-diagnostics-status-item-icon {
+  background: rgba(99, 102, 241, 0.14);
+  color: #4338ca;
+}
+
+.account-diagnostics-status-item.is-connection .account-diagnostics-status-item-label {
+  color: #1d4ed8;
+}
+
+.account-diagnostics-status-item.is-keepalive .account-diagnostics-status-item-label {
+  color: #047857;
+}
+
+.account-diagnostics-status-item.is-token .account-diagnostics-status-item-label {
+  color: #b45309;
+}
+
+.account-diagnostics-status-item.is-readiness .account-diagnostics-status-item-label {
+  color: #4338ca;
+}
+
+.account-diagnostics-status-item.is-readiness .account-diagnostics-status-item-value {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.about-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.22rem 0.56rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.83rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.about-status-badge.is-success {
+  color: #0f766e;
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.2);
+}
+
+.about-status-badge.is-warning {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
+.about-status-badge.is-danger {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.about-status-badge.is-info {
+  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.2);
+}
+
+.about-status-badge.is-secondary {
+  color: #4b5563;
+  background: rgba(107, 114, 128, 0.1);
+  border-color: rgba(107, 114, 128, 0.18);
+}
+
+.account-diagnostics-readiness-summary {
+  display: flex;
+  flex: 1;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 0.78rem;
+}
+
+.account-diagnostics-readiness-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.account-diagnostics-readiness-ratio {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.28rem;
+  line-height: 0.95;
+  color: #312e81;
+}
+
+.account-diagnostics-readiness-ratio-current {
+  font-size: 2.85rem;
+  font-weight: 800;
+  letter-spacing: -0.05em;
+}
+
+.account-diagnostics-readiness-ratio-total {
+  padding-bottom: 0.32rem;
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: rgba(67, 56, 202, 0.72);
+}
+
+.account-diagnostics-readiness-caption {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-readiness-progress {
+  position: relative;
+  overflow: hidden;
+  height: 0.62rem;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.14);
+}
+
+.account-diagnostics-readiness-progress-bar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6366f1, #818cf8);
+  box-shadow: 0 8px 18px -12px rgba(99, 102, 241, 0.95);
+}
+
+.account-diagnostics-readiness-percent {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #4338ca;
+}
+
+.account-diagnostics-readiness-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 0.5rem;
+  flex: 1;
+  align-content: stretch;
+}
+
+.account-diagnostics-readiness-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.32rem;
+  min-height: 4.1rem;
+  padding: 0.62rem 0.68rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.82);
+}
+
+.account-diagnostics-readiness-name-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  min-width: 0;
+}
+
+.account-diagnostics-readiness-dot {
+  width: 0.44rem;
+  height: 0.44rem;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.account-diagnostics-readiness-chip.is-ready {
+  border-color: rgba(16, 185, 129, 0.22);
+  background: rgba(236, 253, 245, 0.95);
+  color: #0f766e;
+}
+
+.account-diagnostics-readiness-chip.is-pending {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: rgba(255, 251, 235, 0.95);
+  color: #b45309;
+}
+
+.account-diagnostics-readiness-name {
+  font-size: 0.81rem;
+  font-weight: 700;
+  color: currentColor;
+}
+
+.account-diagnostics-readiness-state {
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: currentColor;
+}
+
+.account-diagnostics-readiness-summary-note {
+  padding: 0.72rem 0.78rem;
+  border: 1px solid rgba(99, 102, 241, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-status-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.account-diagnostics-status-meta-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  padding: 0.46rem 0.62rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.account-diagnostics-status-meta-label {
+  color: var(--text-secondary);
+}
+
+.account-diagnostics-status-meta-value {
+  color: var(--text-color);
+  font-weight: 600;
+  font-size: 0.92rem;
+  text-align: right;
+}
+
+.account-diagnostics-history-form {
+  padding: 0.85rem 0.95rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.account-diagnostics-history-form .form-label {
+  margin-bottom: 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.account-diagnostics-history-input-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.account-diagnostics-history-input-wrap .form-control {
+  min-height: 46px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.95);
+}
+
+.account-diagnostics-history-input-wrap .btn {
+  min-width: 172px;
+  min-height: 46px;
+  padding-inline: 1rem;
+  border-radius: 12px;
+}
+
+.account-diagnostics-history-form .form-text {
+  margin-top: 0.45rem;
+  font-size: 0.78rem;
+}
+
+.about-history-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.92);
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+}
+
+.about-history-summary-main {
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.about-history-summary-meta {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.24rem 0.62rem;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 70, 229, 0.14);
+  background: rgba(79, 70, 229, 0.08);
+  color: #4338ca;
+  font-size: 0.78rem;
+}
+
+.about-history-items {
+  display: grid;
+  gap: 0.85rem;
+}
+
+#aboutConversationHistory .about-placeholder {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+#aboutConversationHistory .about-placeholder i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 999px;
+  background: rgba(79, 70, 229, 0.08);
+  color: #6366f1;
+  font-size: 1.1rem;
+}
+
+.about-history-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.about-history-item {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 0.95rem 1rem;
+  background: var(--card-bg);
+  box-shadow: 0 12px 24px -24px rgba(15, 23, 42, 0.45);
+}
+
+.about-history-item::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, #4f46e5, #818cf8);
+}
+
+.about-history-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.about-history-sender-block {
+  min-width: 0;
+}
+
+.about-history-sender-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.about-history-sender-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.16), rgba(129, 140, 248, 0.22));
+  color: #4338ca;
+  font-size: 0.82rem;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.about-history-sender-meta {
+  min-width: 0;
+}
+
+.about-history-sender {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.about-history-sender-id {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.about-history-index {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.24rem 0.58rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: rgba(248, 250, 252, 0.9);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.about-history-message-shell {
+  padding: 0.85rem 0.95rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.about-history-message {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-color);
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.about-history-raw {
+  margin-top: 0.75rem;
+}
+
+.about-history-raw summary {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.28rem 0.62rem;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.1);
+  cursor: pointer;
+  color: var(--primary-color);
+  font-size: 0.82rem;
+  user-select: none;
+}
+
+.about-history-raw pre {
+  margin: 0.6rem 0 0;
+  padding: 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.9);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.about-placeholder {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+  padding: 0.95rem 1rem;
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.85);
+}
+
+.about-placeholder i {
+  font-size: 1.35rem;
+  color: var(--text-secondary);
+}
+
+.about-placeholder-title {
+  margin-bottom: 0.2rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.about-placeholder-sub {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .account-diagnostics-card .card-header .form-select {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+[data-theme="dark"] .account-diagnostics-card .card-header .text-muted {
+  color: rgba(255, 255, 255, 0.72) !important;
+}
+
+[data-theme="dark"] .account-diagnostics-picker .form-label {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+[data-theme="dark"] .account-diagnostics-main-panel {
+  border-color: rgba(129, 140, 248, 0.28);
+  background:
+    radial-gradient(circle at top right, rgba(99, 102, 241, 0.22), transparent 36%),
+    linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.95));
+}
+
+[data-theme="dark"] .account-diagnostics-history-panel {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.95));
+}
+
+[data-theme="dark"] .account-diagnostics-main-panel .account-diagnostics-section-title {
+  color: #c7d2fe;
+}
+
+[data-theme="dark"] .account-diagnostics-summary-item,
+[data-theme="dark"] .about-status-panel,
+[data-theme="dark"] .about-history-panel,
+[data-theme="dark"] .account-diagnostics-status-item,
+[data-theme="dark"] .about-history-item,
+[data-theme="dark"] .account-diagnostics-status-meta-item,
+[data-theme="dark"] .account-diagnostics-history-form,
+[data-theme="dark"] .about-history-summary,
+[data-theme="dark"] .about-history-message-shell,
+[data-theme="dark"] .about-placeholder,
+[data-theme="dark"] .account-diagnostics-readiness-chip,
+[data-theme="dark"] .about-history-index,
+[data-theme="dark"] .about-history-raw pre {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+}
+
+[data-theme="dark"] .account-diagnostics-status-item.is-connection {
+  background: linear-gradient(135deg, rgba(30, 64, 175, 0.24), rgba(30, 41, 59, 0.96) 52%);
+}
+
+[data-theme="dark"] .account-diagnostics-status-item.is-keepalive {
+  background: linear-gradient(135deg, rgba(6, 95, 70, 0.26), rgba(30, 41, 59, 0.96) 52%);
+}
+
+[data-theme="dark"] .account-diagnostics-status-item.is-token {
+  background: linear-gradient(135deg, rgba(146, 64, 14, 0.24), rgba(30, 41, 59, 0.96) 52%);
+}
+
+[data-theme="dark"] .account-diagnostics-status-item.is-readiness {
+  background: linear-gradient(135deg, rgba(67, 56, 202, 0.26), rgba(30, 41, 59, 0.96) 52%);
+}
+
+[data-theme="dark"] .account-diagnostics-vnc-panel {
+  border-color: rgba(56, 189, 248, 0.28);
+  background:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.22), transparent 38%),
+    linear-gradient(135deg, rgba(12, 74, 110, 0.44), rgba(30, 41, 59, 0.96));
+}
+
+[data-theme="dark"] .account-diagnostics-vnc-title {
+  color: #bae6fd;
+}
+
+[data-theme="dark"] .account-diagnostics-vnc-url {
+  background: rgba(14, 165, 233, 0.18);
+  color: #bae6fd;
+}
+
+[data-theme="dark"] .manual-intervention-alert {
+  border-color: rgba(248, 113, 113, 0.3);
+  background:
+    radial-gradient(circle at top left, rgba(239, 68, 68, 0.2), transparent 36%),
+    linear-gradient(135deg, rgba(127, 29, 29, 0.3), rgba(30, 41, 59, 0.96));
+}
+
+[data-theme="dark"] .manual-intervention-alert-icon {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .manual-intervention-alert-title {
+  color: #fecaca;
+}
+
+[data-theme="dark"] .about-history-summary-meta {
+  border-color: rgba(129, 140, 248, 0.3);
+  background: rgba(99, 102, 241, 0.18);
+  color: #c7d2fe;
+}
+
+[data-theme="dark"] .about-history-raw summary {
+  background: rgba(148, 163, 184, 0.14);
+}
+
+[data-theme="dark"] #aboutConversationHistory .about-placeholder {
+  background: rgba(30, 41, 59, 0.92);
+}
+
+[data-theme="dark"] #aboutConversationHistory .about-placeholder i {
+  background: rgba(99, 102, 241, 0.16);
+  color: #c7d2fe;
+}
+
+[data-theme="dark"] .account-diagnostics-history-input-wrap .form-control {
+  background: rgba(15, 23, 42, 0.55);
+}
+
+[data-theme="dark"] .about-history-sender-avatar {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.24), rgba(129, 140, 248, 0.32));
+  color: #e0e7ff;
+}
+
+[data-theme="dark"] .account-diagnostics-readiness-chip.is-ready {
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.28);
+  background: rgba(6, 95, 70, 0.24);
+}
+
+[data-theme="dark"] .account-diagnostics-readiness-chip.is-pending {
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(146, 64, 14, 0.22);
+}
+
+[data-theme="dark"] .account-diagnostics-readiness-ratio {
+  color: #e0e7ff;
+}
+
+[data-theme="dark"] .account-diagnostics-readiness-ratio-total,
+[data-theme="dark"] .account-diagnostics-readiness-percent {
+  color: #c7d2fe;
+}
+
+[data-theme="dark"] .account-diagnostics-readiness-progress {
+  background: rgba(129, 140, 248, 0.24);
+}
+
+[data-theme="dark"] .account-diagnostics-readiness-progress-bar {
+  background: linear-gradient(90deg, #818cf8, #a5b4fc);
+}
+
+[data-theme="dark"] .account-diagnostics-readiness-summary-note {
+  background: rgba(30, 41, 59, 0.58);
+  border-color: rgba(129, 140, 248, 0.24);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .account-diagnostics-status-note-bar {
+  border-color: var(--border-color);
+}
+
+[data-theme="dark"] .account-diagnostics-status-note-bar.is-success {
+  background: rgba(16, 185, 129, 0.14);
+}
+
+[data-theme="dark"] .account-diagnostics-status-note-bar.is-warning {
+  background: rgba(245, 158, 11, 0.14);
+}
+
+[data-theme="dark"] .account-diagnostics-status-note-bar.is-danger {
+  background: rgba(239, 68, 68, 0.14);
+}
+
+[data-theme="dark"] .account-diagnostics-status-note-bar.is-info {
+  background: rgba(59, 130, 246, 0.14);
+}
+
+/* ================================
+   暗色模式适配 - 账号管理
+   ================================ */
+
+/* 禁用账号行 */
+[data-theme="dark"] .account-row.disabled {
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .account-row.disabled .cookie-value {
+  background-color: var(--input-bg);
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .cookie-value {
+  color: var(--text-color);
+}
+
+/* 状态徽章 */
+[data-theme="dark"] .status-badge.enabled {
+  background: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+[data-theme="dark"] .status-badge.disabled {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+[data-theme="dark"] .account-status-note-badge {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.32);
+}
+
+[data-theme="dark"] .account-action-group {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .account-action-group-label {
+  background: rgba(51, 65, 85, 0.9);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .account-action-group-basic {
+  background: rgba(30, 41, 59, 0.55);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .account-action-group-reply {
+  background: rgba(6, 78, 59, 0.24);
+  border-color: rgba(16, 185, 129, 0.24);
+}
+
+[data-theme="dark"] .account-action-group-item {
+  background: rgba(30, 64, 175, 0.2);
+  border-color: rgba(59, 130, 246, 0.24);
+}
+
+[data-theme="dark"] .account-action-group-flower {
+  background: rgba(146, 64, 14, 0.2);
+  border-color: rgba(251, 146, 60, 0.24);
+}
+
+[data-theme="dark"] .account-action-group-danger {
+  background: rgba(127, 29, 29, 0.2);
+  border-color: rgba(248, 113, 113, 0.24);
+}
+
+/* 禁用账号提示 */
+[data-theme="dark"] .disabled-account-notice {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #fcd34d;
+}
+
+/* 扫码登录模态框 */
+[data-theme="dark"] .qr-loading-tip,
+[data-theme="dark"] .bg-light-warning {
+  background-color: rgba(245, 158, 11, 0.15) !important;
+  color: #fcd34d;
+}
+
+[data-theme="dark"] .qr-login-btn small.opacity-75 {
+  color: #ecfdf5;
+  opacity: 1 !important;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="dark"] .qr-loading-tip .text-warning,
+[data-theme="dark"] .qr-loading-tip small {
+  color: #fcd34d !important;
+}
+
+[data-theme="dark"] #qrCodeLoginModal .step-item small {
+  color: var(--text-color);
+}
+
+[data-theme="dark"] #qrCodeLoginModal .text-muted {
+  color: var(--text-secondary) !important;
+}
+
+[data-theme="dark"] #qrCodeLoginModal .alert.bg-light {
+  background-color: var(--bg-secondary) !important;
+  color: var(--text-color);
+}
+
+[data-theme="dark"] #qrCodeLoginModal .alert.bg-light small {
+  color: var(--text-color);
+}
+
+[data-theme="dark"] #qrCodeLoginModal .modal-footer.bg-light {
+  background-color: var(--bg-secondary) !important;
+}
+
+[data-theme="dark"] #qrCodeLoginModal .qr-code-wrapper.bg-light {
+  background-color: var(--bg-secondary) !important;
+}
+
+[data-theme="dark"] #qrCodeLoginModal #statusText {
+  color: var(--text-secondary);
+}
+
+/* 响应式设计 */
+@media (max-width: 992px) {
+  .account-diagnostics-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .account-diagnostics-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .account-diagnostics-picker {
+    max-width: none;
+    width: 100%;
+  }
+
+  .account-diagnostics-status-body {
+    grid-template-columns: 1fr;
+  }
+
+  .account-diagnostics-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-diagnostics-status-note-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .account-diagnostics-vnc-panel {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .account-diagnostics-vnc-button {
+    width: 100%;
+  }
+
+  .manual-intervention-alert {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manual-intervention-alert-icon {
+    display: none;
+  }
+
+  .manual-intervention-alert-action {
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .status-toggle {
+    width: 40px;
+    height: 20px;
+  }
+
+  .status-slider:before {
+    height: 14px;
+    width: 14px;
+    left: 3px;
+    bottom: 3px;
+  }
+
+  input:checked + .status-slider:before {
+    transform: translateX(20px);
+  }
+
+  .qr-login-btn, .manual-input-btn {
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+  }
+
+  .step-item {
+    margin-bottom: 15px;
+  }
+
+  .step-number {
+    width: 25px !important;
+    height: 25px !important;
+    font-size: 12px;
+  }
+
+  .account-diagnostics-card .card-body {
+    padding: 1rem;
+  }
+
+  .account-diagnostics-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .about-diagnostics-account-meta,
+  .account-diagnostics-layout,
+  .account-diagnostics-status-body,
+  .account-diagnostics-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-diagnostics-toolbar,
+  .account-diagnostics-status-meta {
+    justify-content: stretch;
+  }
+
+  .account-diagnostics-status-meta {
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
+  }
+
+  .account-diagnostics-actions .btn {
+    width: 100%;
+  }
+
+  .account-diagnostics-history-input-wrap {
+    grid-template-columns: 1fr;
+  }
+
+  .account-diagnostics-history-input-wrap .btn {
+    width: 100%;
+  }
+
+  .about-history-item-header,
+  .about-history-summary {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

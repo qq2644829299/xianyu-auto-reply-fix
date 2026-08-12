@@ -1,0 +1,100 @@
+API_ENDPOINTS:
+  login_check: https://passport.goofish.com/newlogin/hasLogin.do
+  login_user: https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.loginuser.get/1.0/
+  message_headinfo: https://h5api.m.goofish.com/h5/mtop.idle.trade.pc.message.headinfo/1.0/
+  token: https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/
+APP_CONFIG:
+  api_version: '1.0'
+  app_key: 444e9908a51d1cb236a27862abc769c9
+  app_version: '1.0'
+  platform: web
+AUTO_REPLY:
+  api:
+    enabled: false  # 禁用API回复，使用AI回复或关键词回复
+    host: 0.0.0.0  # 绑定所有网络接口，支持IP访问
+    port: 8090     # Web服务端口
+    timeout: 10
+    url: http://localhost:8090/xianyu/reply  # 修复URL地址
+  default_message: 亲爱的"{send_user_name}" 老板你好！所有宝贝都可以拍，秒发货的哈~不满意的话可以直接申请退款哈~
+  enabled: true
+  max_retry: 3
+  retry_interval: 5
+ITEM_DETAIL:
+  auto_fetch:
+    enabled: true  # 是否启用自动获取商品详情
+    api_url: https://selfapi.zhinianboke.com/api/getItemDetail  # 外部API地址
+    timeout: 30  # 请求超时时间（秒）
+    max_concurrent: 3  # 最大并发请求数
+    retry_delay: 0.5  # 请求间隔（秒）
+YIFAN_API:
+  callback_url: http://116.196.116.76/yifan.php  # 亦凡API回调地址（中转服务器）
+  query_url: http://116.196.116.76/yifan.php  # 订单查询页面地址
+COOKIES:
+  last_update_time: ''
+  value: ''
+DEFAULT_HEADERS:
+  accept: application/json
+  accept-language: zh-CN,zh;q=0.9
+  cache-control: no-cache
+  origin: https://www.goofish.com
+  pragma: no-cache
+  priority: u=1, i
+  referer: https://www.goofish.com/
+  sec-ch-ua: '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"'
+  sec-ch-ua-mobile: ?0
+  sec-ch-ua-platform: '"Windows"'
+  sec-fetch-dest: empty
+  sec-fetch-mode: cors
+  sec-fetch-site: same-site
+  user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+    like Gecko) Chrome/133.0.0.0 Safari/537.36
+HEARTBEAT_INTERVAL: 15
+HEARTBEAT_TIMEOUT: 30
+LOG_CONFIG:
+  compression: zip
+  format: '<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level>
+    | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>'
+  level: INFO
+  retention: 7 days
+  rotation: 1 day
+MANUAL_MODE:
+  enabled: false
+  timeout: 3600
+  toggle_keywords: []
+MESSAGE_EXPIRE_TIME: 300000
+RISK_CONTROL:
+  backoff_escalation_factor: 1.5
+  backoff_max_cap_seconds: 3600
+  consecutive_failure_protection_threshold: 5
+  max_post_slider_session_retries: 1
+  soft_auth_token_preflight_enabled: true
+  soft_auth_token_preflight_timeout_seconds: 5.0
+  soft_auth_token_preflight_qr_enabled: false
+  night_cookie_refresh_multiplier: 2
+  night_end_hour: 6
+  night_keepalive_multiplier: 3
+  night_mode_enabled: false
+  night_start_hour: 1
+  qr_login_grace_minutes: 15
+  post_slider_retry_delay_max: 10.0
+  post_slider_retry_delay_min: 5.0
+  token_refresh_dedup_window_seconds: 60
+  token_retry_min_wait_seconds: 180
+TOKEN_REFRESH_INTERVAL: 72000  # AccessToken 仅在初始化/重连前按需刷新，默认20小时
+TOKEN_RETRY_INTERVAL: 600
+SESSION_KEEPALIVE_INTERVAL: 600  # 使用 loginuser.get 的轻量保活周期，默认10分钟
+SESSION_KEEPALIVE_RETRY_INTERVAL: 180  # 轻量保活失败后的重试间隔，默认3分钟
+SLIDER_VERIFICATION:
+  max_concurrent: 3  # 滑块验证最大并发数
+  wait_timeout: 60   # 等待排队超时时间（秒）
+WEBSOCKET_HEADERS:
+  Accept-Encoding: gzip, deflate, br, zstd
+  Accept-Language: zh-CN,zh;q=0.9
+  Cache-Control: no-cache
+  Connection: Upgrade
+  Host: wss-goofish.dingtalk.com
+  Origin: https://www.goofish.com
+  Pragma: no-cache
+  User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+    like Gecko) Chrome/133.0.0.0 Safari/537.36
+WEBSOCKET_URL: wss://wss-goofish.dingtalk.com/
