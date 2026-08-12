@@ -5590,7 +5590,6 @@ async function openAccountEditModal(accountData) {
     document.getElementById('editAccountCookie').value = accountData.value || '';
     document.getElementById('editAccountUsername').value = accountData.username || '';
     document.getElementById('editAccountPassword').value = accountData.password || '';
-    document.getElementById('editAccountShowBrowser').checked = accountData.show_browser || false;
     
     // 显示账号ID
     document.getElementById('accountEditIdDisplay').textContent = accountData.id;
@@ -5647,7 +5646,7 @@ async function saveAccountEdit() {
     const cookie = document.getElementById('editAccountCookie').value.trim();
     const username = document.getElementById('editAccountUsername').value.trim();
     const password = document.getElementById('editAccountPassword').value.trim();
-    const showBrowser = document.getElementById('editAccountShowBrowser').checked;
+    const showBrowser = false;
     
     // 代理配置
     const proxyType = document.getElementById('editProxyType').value;
@@ -8842,11 +8841,42 @@ function updateCardsStats(cards) {
 }
 
 // 显示添加卡券模态框
+let pendingProductCardBinding = null;
+
 function showAddCardModal() {
+    pendingProductCardBinding = null;
     document.getElementById('addCardForm').reset();
     toggleCardTypeFields();
     const modal = new bootstrap.Modal(document.getElementById('addCardModal'));
     modal.show();
+}
+
+function openProductDeliveryCardEditor(cookieId, itemId, cardId = null) {
+    if (cardId) {
+        editCard(Number(cardId));
+        return;
+    }
+
+    showAddCardModal();
+    pendingProductCardBinding = { cookieId, itemId };
+    const item = autoDeliveryProducts.find(candidate => candidate.cookie_id === cookieId && String(candidate.item_id) === String(itemId));
+    const nameInput = document.getElementById('cardName');
+    if (nameInput && !nameInput.value) {
+        nameInput.value = `${item?.item_title || itemId} 自动发货`;
+    }
+}
+
+async function bindNewCardToPendingProduct(cardId) {
+    if (!pendingProductCardBinding || !cardId) return;
+    const { cookieId, itemId } = pendingProductCardBinding;
+    const response = await fetch(`${apiBase}/items/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/delivery-card`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({ card_id: Number(cardId) })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || '卡券已创建，但绑定商品失败');
+    pendingProductCardBinding = null;
 }
 
 // 切换卡券类型字段显示
@@ -9396,8 +9426,7 @@ async function saveCard() {
         break;
     }
 
-    // 获取"生成对应发货规则"开关状态
-    const generateDeliveryRule = document.getElementById('generateDeliveryRule').checked;
+    const generateDeliveryRule = false;
     
     const response = await fetch(`${apiBase}/cards`, {
         method: 'POST',
@@ -9412,11 +9441,19 @@ async function saveCard() {
     });
 
     if (response.ok) {
-        showToast('卡券保存成功', 'success');
+        const savedCard = await response.json().catch(() => ({}));
+        const shouldBindProduct = Boolean(pendingProductCardBinding);
+        await bindNewCardToPendingProduct(savedCard.id);
+        showToast(shouldBindProduct ? '卡券已保存并绑定到商品' : '卡券保存成功', 'success');
         bootstrap.Modal.getInstance(document.getElementById('addCardModal')).hide();
         // 清空表单
         clearAddCardForm();
         loadCards();
+        invalidateWorkspaceCache('/items');
+        invalidateWorkspaceCache('/cards');
+        if (document.getElementById('auto-delivery-section')?.classList.contains('active')) {
+            await loadAutoDeliveryWorkspace(true);
+        }
     } else {
         let errorMessage = '保存失败';
         try {
@@ -9987,6 +10024,10 @@ async function updateCard() {
         showToast('卡券更新成功', 'success');
         bootstrap.Modal.getInstance(document.getElementById('editCardModal')).hide();
         loadCards();
+        invalidateWorkspaceCache('/cards');
+        if (document.getElementById('auto-delivery-section')?.classList.contains('active')) {
+            await loadAutoDeliveryWorkspace(true);
+        }
     } else {
         const error = await response.text();
         showToast(`更新失败: ${error}`, 'danger');
@@ -10030,6 +10071,10 @@ async function updateCardWithImage(cardId, cardData, imageFile) {
             showToast('卡券更新成功', 'success');
             bootstrap.Modal.getInstance(document.getElementById('editCardModal')).hide();
             loadCards();
+            invalidateWorkspaceCache('/cards');
+            if (document.getElementById('auto-delivery-section')?.classList.contains('active')) {
+                await loadAutoDeliveryWorkspace(true);
+            }
         } else {
             const error = await response.text();
             showToast(`更新失败: ${error}`, 'danger');
@@ -12002,38 +12047,19 @@ async function saveItemDeliveryCardBinding() {
     }
 }
 
-function mountCardsInsideAutoDelivery() {
-    const host = document.getElementById('autoDeliveryCardsHost');
-    const cardsSection = document.getElementById('cards-section');
-    const cardsBody = cardsSection?.querySelector('.content-body');
-    if (host && cardsBody && !host.contains(cardsBody)) {
-        host.appendChild(cardsBody);
-        cardsBody.classList.remove('content-body');
-    }
-}
-
 async function loadAutoDeliveryWorkspace(force = false) {
-    mountCardsInsideAutoDelivery();
     const tbody = document.getElementById('autoDeliveryProductsTableBody');
     if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">正在加载商品...</td></tr>';
     try {
-        const [itemsPayload, cardsPayload, accounts, stats, logsPayload] = await Promise.all([
+        const [itemsPayload, cardsPayload, accounts] = await Promise.all([
             fetchWorkspaceJson('/items', { force }),
             fetchWorkspaceJson('/cards', { force }),
-            fetchWorkspaceJson('/cookies/details', { ttl: 15000, force }),
-            fetchWorkspaceJson('/delivery-rules/stats', { force }),
-            fetchWorkspaceJson('/delivery-logs/recent?limit=10', { force })
+            fetchWorkspaceJson('/cookies/details', { ttl: 15000, force })
         ]);
         autoDeliveryProducts = itemsPayload.items || [];
         autoDeliveryCards = cardsPayload.cards || cardsPayload || [];
         populateAutoDeliveryAccountFilters(accounts || []);
         filterAutoDeliveryProducts();
-        renderCardsList(autoDeliveryCards);
-        updateCardsStats(autoDeliveryCards);
-        renderAutoDeliveryRecentLogs(logsPayload.logs || []);
-        document.getElementById('autoDeliveryConfiguredProducts').textContent = autoDeliveryProducts.filter(item => item.auto_delivery_enabled || item.delivery_card_id).length;
-        document.getElementById('autoDeliveryEnabledCards').textContent = autoDeliveryCards.filter(card => card.enabled).length;
-        document.getElementById('todayDeliveries').textContent = stats.today_delivery_count || 0;
     } catch (error) {
         console.error('加载自动发货工作台失败:', error);
         if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-4">${escapeHtml(error.message || '加载失败')}</td></tr>`;
@@ -12082,7 +12108,7 @@ function renderAutoDeliveryProducts(products) {
           <td><input class="form-check-input auto-delivery-product-check" type="checkbox" data-cookie-id="${escapeHtml(item.cookie_id)}" data-item-id="${escapeHtml(item.item_id)}"></td>
           <td><div class="fw-semibold">${escapeHtml(title)}</div><div class="small text-muted">${escapeHtml(getItemDetailText(item.item_detail || '').slice(0, 60))}</div></td>
           <td>${escapeHtml(item.cookie_id)}</td><td>${escapeHtml(item.item_id)}</td><td>${cardBadge}</td><td>${formatDateTime(item.updated_at)}</td>
-          <td><div class="d-flex gap-1"><button class="btn btn-sm btn-outline-primary" onclick="bindItemDeliveryCard('${escapeHtml(item.cookie_id)}','${escapeHtml(item.item_id)}',${item.delivery_card_id ? Number(item.delivery_card_id) : 'null'})"><i class="bi bi-credit-card me-1"></i>${card ? '更换卡券' : '添加卡券'}</button><button class="btn btn-sm btn-outline-danger" onclick="removeAutoDeliveryProduct('${escapeHtml(item.cookie_id)}','${escapeHtml(item.item_id)}')" title="移出自动发货"><i class="bi bi-x-lg"></i></button></div></td>
+          <td><div class="d-flex gap-1"><button class="btn btn-sm btn-outline-primary" onclick="openProductDeliveryCardEditor('${escapeHtml(item.cookie_id)}','${escapeHtml(item.item_id)}',${item.delivery_card_id ? Number(item.delivery_card_id) : 'null'})"><i class="bi bi-credit-card me-1"></i>${card ? '编辑卡券' : '添加卡券'}</button><button class="btn btn-sm btn-outline-danger" onclick="removeAutoDeliveryProduct('${escapeHtml(item.cookie_id)}','${escapeHtml(item.item_id)}')" title="移出自动发货"><i class="bi bi-x-lg"></i></button></div></td>
         </tr>`;
     }).join('');
 }
@@ -12093,8 +12119,6 @@ function toggleAllAutoDeliveryProducts(checked) {
 
 function openAddAutoDeliveryProductModal() {
     populateAutoDeliveryProductChoices();
-    const cardSelect = document.getElementById('addAutoDeliveryCard');
-    cardSelect.innerHTML = '<option value="">暂不绑定，添加后再配置</option>' + autoDeliveryCards.filter(card => card.enabled).map(card => `<option value="${Number(card.id)}">${escapeHtml(card.name)}</option>`).join('');
     bootstrap.Modal.getOrCreateInstance(document.getElementById('addAutoDeliveryProductModal')).show();
 }
 
@@ -12109,7 +12133,6 @@ function populateAutoDeliveryProductChoices() {
 async function saveAutoDeliveryProduct() {
     const selected = document.getElementById('addAutoDeliveryProduct')?.value || '';
     const [cookieId, itemId] = selected.split('::');
-    const cardValue = document.getElementById('addAutoDeliveryCard')?.value || '';
     if (!cookieId || !itemId) return showToast('请选择商品', 'warning');
     try {
         const enableResponse = await fetch(`${apiBase}/items/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/auto-delivery`, {
@@ -12118,18 +12141,10 @@ async function saveAutoDeliveryProduct() {
         });
         const enablePayload = await enableResponse.json().catch(() => ({}));
         if (!enableResponse.ok) throw new Error(enablePayload.detail || '添加商品失败');
-        if (cardValue) {
-            const bindResponse = await fetch(`${apiBase}/items/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/delivery-card`, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-                body: JSON.stringify({ card_id: Number(cardValue) })
-            });
-            const bindPayload = await bindResponse.json().catch(() => ({}));
-            if (!bindResponse.ok) throw new Error(bindPayload.detail || '绑定卡券失败');
-        }
         bootstrap.Modal.getInstance(document.getElementById('addAutoDeliveryProductModal'))?.hide();
         invalidateWorkspaceCache('/items');
         await loadAutoDeliveryWorkspace(true);
-        showToast(cardValue ? '商品已添加并绑定卡券' : '商品已添加，可继续配置卡券', 'success');
+        showToast('商品已添加，请在该商品上添加卡券后启用自动发货', 'success');
     } catch (error) { showToast(error.message || '添加商品失败', 'danger'); }
 }
 
@@ -13916,8 +13931,7 @@ async function handleManualCookieImport(event) {
 
     const accountId = document.getElementById('cookieId').value.trim();
     const cookieValue = document.getElementById('cookieValue').value.trim();
-    const showBrowserCheckbox = document.getElementById('manualCookieShowBrowser');
-    const showBrowser = showBrowserCheckbox ? showBrowserCheckbox.checked : false;
+    const showBrowser = false;
 
     if (!accountId || !cookieValue) {
         showToast('请填写完整的账号ID和Cookie', 'warning');
@@ -14049,8 +14063,8 @@ async function checkManualCookieImportStatus() {
                     break;
                 case 'verification_required':
                     showPasswordLoginQRCode(
-                        data.screenshot_path || data.verification_url,
-                        data.screenshot_path,
+                        data.qr_code_url || data.screenshot_path || data.verification_url,
+                        data.qr_code_url || data.screenshot_path,
                         data.verification_type
                     );
                     break;
@@ -14219,7 +14233,7 @@ async function handleRefreshCookie(event) {
     const select = document.getElementById('refreshCookieAccountSelect');
     const cookieId = select.value;
     const selectedOption = select.options[select.selectedIndex];
-    const showBrowser = document.getElementById('refreshCookieShowBrowser').checked;
+    const showBrowser = false;
 
     if (!cookieId) {
         showToast('请选择要刷新的账号', 'warning');
@@ -14352,8 +14366,8 @@ function startRefreshCookiePolling(sessionId, cookieId) {
                     updateRefreshCookieStatus(`需要${getPasswordLoginVerificationTypeLabel(data.verification_type)}，请查看弹出的验证窗口`);
                     // 使用账号密码登录的验证显示函数
                     showPasswordLoginQRCode(
-                        data.screenshot_path || data.verification_url || data.qr_code_url,
-                        data.screenshot_path,
+                        data.qr_code_url || data.screenshot_path || data.verification_url,
+                        data.qr_code_url || data.screenshot_path,
                         data.verification_type
                     );
                     break;
@@ -14422,7 +14436,7 @@ async function handlePasswordLogin(event) {
     const accountId = document.getElementById('passwordLoginAccountId').value.trim();
     const account = document.getElementById('passwordLoginAccount').value.trim();
     const password = document.getElementById('passwordLoginPassword').value;
-    const showBrowser = document.getElementById('passwordLoginShowBrowser').checked;
+    const showBrowser = false;
     
     if (!accountId || !account || !password) {
         showToast('请填写完整的登录信息', 'warning');
@@ -14513,8 +14527,8 @@ async function checkPasswordLoginStatus() {
                 case 'verification_required':
                     // 需要身份验证，显示验证截图或链接
                     showPasswordLoginQRCode(
-                        data.screenshot_path || data.verification_url || data.qr_code_url,
-                        data.screenshot_path,
+                        data.qr_code_url || data.screenshot_path || data.verification_url,
+                        data.qr_code_url || data.screenshot_path,
                         data.verification_type
                     );
                     // 继续监控（人脸认证后需要继续等待登录完成）
@@ -14806,10 +14820,10 @@ function createPasswordLoginQRModal() {
                             需要闲鱼身份验证，请等待验证信息...
                         </p>
                         
-                        <!-- 截图显示区域 -->
+                        <!-- 二维码显示区域 -->
                         <div id="passwordLoginScreenshotContainer" class="mb-3 d-flex justify-content-center">
-                            <img id="passwordLoginScreenshotImg" src="" alt="验证截图" 
-                                 class="img-fluid" style="display: none; max-width: 400px; height: auto; border: 2px solid #ddd; border-radius: 8px;">
+                            <img id="passwordLoginScreenshotImg" src="" alt="闲鱼验证二维码"
+                                 style="display: none; width: min(78vw, 420px); height: min(78vw, 420px); object-fit: contain; background: #fff; padding: 16px; border: 2px solid #e5e7eb; border-radius: 16px;">
                         </div>
                         
                         <!-- 验证链接按钮（回退方案） -->

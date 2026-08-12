@@ -459,14 +459,6 @@
                   <input type="password" class="form-control" id="passwordLoginPassword" placeholder="请输入密码" required>
                 </div>
                 <div class="col-12">
-                  <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="passwordLoginShowBrowser" value="1">
-                    <label class="form-check-label" for="passwordLoginShowBrowser">
-                      显示浏览器窗口（如果使用服务器，请勿打开该开关，会导致登录失败）
-                    </label>
-                  </div>
-                </div>
-                <div class="col-12">
                   <button type="submit" class="btn btn-primary">
                     <i class="bi bi-box-arrow-in-right me-1"></i>开始登录
                   </button>
@@ -491,14 +483,6 @@
                 <div class="col-md-9">
                   <label for="cookieValue" class="form-label">Cookie值</label>
                   <input type="text" class="form-control" id="cookieValue" placeholder="完整Cookie字符串" required>
-                </div>
-                <div class="col-12">
-                  <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="manualCookieShowBrowser" value="1">
-                    <label class="form-check-label" for="manualCookieShowBrowser">
-                      显示浏览器窗口（默认关闭，优先走无头验证；仅在本机排查时开启）
-                    </label>
-                  </div>
                 </div>
                 <div class="col-12">
                   <button type="submit" class="btn btn-primary">
@@ -528,14 +512,6 @@
                   <label class="form-label">账号状态</label>
                   <div id="refreshCookieAccountStatus" class="form-control-plaintext text-muted">
                     请先选择账号
-                  </div>
-                </div>
-                <div class="col-12">
-                  <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="refreshCookieShowBrowser" value="1">
-                    <label class="form-check-label" for="refreshCookieShowBrowser">
-                      显示浏览器窗口（仅影响本次刷新，不会改变自动刷新的设置；如果使用服务器，请勿打开该开关）
-                    </label>
                   </div>
                 </div>
                 <div class="col-12">
@@ -1762,27 +1738,6 @@
           </div>
         </div>
 
-        <div class="card mb-4">
-          <div class="card-header d-flex justify-content-between align-items-center">
-            <div><h5 class="mb-1">卡券库</h5><div class="text-muted small">卡券统一在自动发货内维护</div></div>
-            <button class="btn btn-primary btn-sm" onclick="showAddCardModal()"><i class="bi bi-plus-lg me-1"></i>新建卡券</button>
-          </div>
-          <div class="card-body" id="autoDeliveryCardsHost"></div>
-        </div>
-
-        <div class="row g-4">
-          <div class="col-lg-8">
-            <div class="card h-100"><div class="card-header"><h5 class="mb-0">最近发货记录</h5></div><div class="card-body"><div id="autoDeliveryRecentLogs" class="text-muted">暂无发货记录</div></div></div>
-          </div>
-          <div class="col-lg-4">
-            <div class="card h-100"><div class="card-header"><h5 class="mb-0">发货统计</h5></div><div class="card-body">
-              <div class="stat-item mb-3 d-flex justify-content-between"><span>已配置商品</span><span class="badge bg-primary" id="autoDeliveryConfiguredProducts">0</span></div>
-              <div class="stat-item mb-3 d-flex justify-content-between"><span>可用卡券</span><span class="badge bg-success" id="autoDeliveryEnabledCards">0</span></div>
-              <div class="stat-item d-flex justify-content-between"><span>今日发货</span><span class="badge bg-info" id="todayDeliveries">0</span></div>
-              <span class="d-none" id="totalRules">0</span><span class="d-none" id="activeRules">0</span><span class="d-none" id="totalDeliveries">0</span>
-            </div></div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -4569,19 +4524,6 @@
               </small>
             </div>
 
-            <div class="mb-3">
-              <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="generateDeliveryRule">
-                <label class="form-check-label" for="generateDeliveryRule">
-                  <strong>生成对应发货规则</strong>
-                </label>
-              </div>
-              <small class="form-text text-muted">
-                <i class="bi bi-info-circle me-1"></i>
-                启用后，创建卡券时会自动生成一条对应的自动发货规则，商品关键字为当前卡券名称，匹配卡券为当前卡券。
-              </small>
-            </div>
-
             <!-- 多规格设置 -->
             <div class="mb-3">
               <div class="form-check form-switch">
@@ -5093,7 +5035,7 @@
 
   <!-- JS依赖 -->
   <script src="/static/lib/bootstrap/bootstrap.bundle.min.js"></script>
-  <script src="/static/js/app.js?v=1.3.1"></script>
+  <script src="/static/js/app.js?v=1.3.2"></script>
 
   <!-- 默认回复管理模态框 -->
   <div class="modal fade" id="defaultReplyModal" tabindex="-1" aria-labelledby="defaultReplyModalLabel" aria-hidden="true">
@@ -5267,7 +5209,6 @@
         <div class="row g-3">
           <div class="col-md-5"><label class="form-label" for="addAutoDeliveryAccount">闲鱼账号</label><select class="form-select" id="addAutoDeliveryAccount" onchange="populateAutoDeliveryProductChoices()"><option value="">请选择账号</option></select></div>
           <div class="col-md-7"><label class="form-label" for="addAutoDeliveryProduct">商品</label><select class="form-select" id="addAutoDeliveryProduct"><option value="">请选择商品</option></select></div>
-          <div class="col-12"><label class="form-label" for="addAutoDeliveryCard">卡券</label><select class="form-select" id="addAutoDeliveryCard"><option value="">暂不绑定，添加后再配置</option></select></div>
         </div>
       </div>
       <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">取消</button><button class="btn btn-primary" onclick="saveAutoDeliveryProduct()"><i class="bi bi-check-lg me-1"></i>添加商品</button></div>
@@ -5805,20 +5746,6 @@
               <div class="form-text">用于账密登录、手动刷新 Cookie 和自动恢复</div>
             </div>
             
-            <div class="mb-3">
-              <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="editAccountShowBrowser">
-                <label class="form-check-label" for="editAccountShowBrowser">
-                  显示浏览器
-                  <i class="bi bi-info-circle text-info ms-1" data-bs-toggle="tooltip" title="控制该账号在账密相关流程中是否显示浏览器窗口"></i>
-                </label>
-              </div>
-              <div class="form-text text-warning">
-                <i class="bi bi-exclamation-triangle me-1"></i>
-                该设置会影响账密登录、手动刷新 Cookie 和自动恢复流程。仅建议在本机排查滑块、人脸或风控页面时开启，服务器环境不要开启。
-              </div>
-            </div>
-
             <!-- 代理配置 -->
             <hr class="my-4">
             <h6 class="mb-3">

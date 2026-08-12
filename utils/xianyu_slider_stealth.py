@@ -1337,6 +1337,41 @@ class XianyuSliderStealth:
 
             screenshot_bytes = None
 
+            # 二维码验证时优先只截取二维码元素，避免把整张登录页缩小后导致无法扫码。
+            qr_selectors = (
+                'img[alt*="二维码"]',
+                'img[alt*="扫码"]',
+                'img[src*="qrcode"]',
+                'canvas[class*="qrcode"]',
+                '.qr-code',
+                '#qr-code',
+                '[class*="qr-code"]',
+                '[id*="qr-code"]',
+            )
+            qr_scopes = [scope for scope in (frame, page) if scope is not None]
+            for scope in qr_scopes:
+                if screenshot_bytes is not None:
+                    break
+                for selector in qr_selectors:
+                    try:
+                        candidates = scope.query_selector_all(selector)
+                        visible_candidates = []
+                        for candidate in candidates:
+                            if not candidate.is_visible():
+                                continue
+                            box = candidate.bounding_box() or {}
+                            width = float(box.get('width') or 0)
+                            height = float(box.get('height') or 0)
+                            if width >= 80 and height >= 80 and 0.55 <= width / max(height, 1) <= 1.8:
+                                visible_candidates.append((width * height, candidate))
+                        if visible_candidates:
+                            _, qr_element = max(visible_candidates, key=lambda item: item[0])
+                            screenshot_bytes = qr_element.screenshot(timeout=5000)
+                            logger.info(f"【{self.pure_user_id}】优先截取二维码元素成功: {selector}")
+                            break
+                    except Exception as e:
+                        logger.debug(f"【{self.pure_user_id}】截取二维码元素失败({selector}): {e}")
+
             # 方式1：通过 frame.frame_element() 截取 iframe 元素
             if frame is not None and screenshot_bytes is None:
                 try:
@@ -1388,7 +1423,7 @@ class XianyuSliderStealth:
                 return None
 
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"face_verify_{self.pure_user_id}_{timestamp}.jpg"
+            filename = f"face_verify_{self.pure_user_id}_{timestamp}.png"
             file_path = os.path.join(screenshots_dir, filename)
 
             with open(file_path, 'wb') as f:
