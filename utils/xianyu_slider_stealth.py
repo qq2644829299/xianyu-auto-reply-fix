@@ -1642,9 +1642,17 @@ class XianyuSliderStealth:
 
     def _detect_local_browser_info(self) -> Dict[str, Any]:
         if os.name != 'nt':
-            return {}
-
-        browser_candidates = [
+            # 生产镜像已通过系统包安装 Chromium。优先复用它，避免每次镜像或
+            # Playwright 版本变化后在运行时重新下载数百 MB 浏览器，且下载失败会
+            # 直接导致 Cookie 风控验证不可用。
+            browser_candidates = [
+                {"family": "chrome", "channel": "", "path": "/usr/bin/chromium"},
+                {"family": "chrome", "channel": "", "path": "/usr/bin/chromium-browser"},
+                {"family": "chrome", "channel": "", "path": "/usr/bin/google-chrome"},
+                {"family": "chrome", "channel": "", "path": "/usr/bin/google-chrome-stable"},
+            ]
+        else:
+            browser_candidates = [
             {
                 "family": "edge",
                 "channel": "msedge",
@@ -1665,7 +1673,7 @@ class XianyuSliderStealth:
                 "channel": "chrome",
                 "path": r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
             },
-        ]
+            ]
 
         for candidate in browser_candidates:
             browser_path = candidate["path"]

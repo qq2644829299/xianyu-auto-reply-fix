@@ -37,6 +37,39 @@ let currentItemsPage = 1; // 当前页码
 let itemsPerPage = 20; // 每页显示数量
 let totalItemsPages = 0; // 总页数
 let currentSearchKeyword = ''; // 当前搜索关键词
+let autoDeliveryProducts = [];
+let autoDeliveryCards = [];
+const workspaceResponseCache = new Map();
+const workspaceInflightRequests = new Map();
+
+async function fetchWorkspaceJson(path, { ttl = 8000, force = false } = {}) {
+    const cacheKey = `${authToken || ''}:${path}`;
+    const cached = workspaceResponseCache.get(cacheKey);
+    if (!force && cached && Date.now() - cached.savedAt < ttl) {
+        return cached.value;
+    }
+    if (!force && workspaceInflightRequests.has(cacheKey)) {
+        return workspaceInflightRequests.get(cacheKey);
+    }
+    const requestPromise = fetch(`${apiBase}${path}`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+    }).then(async response => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || payload.message || `HTTP ${response.status}`);
+        workspaceResponseCache.set(cacheKey, { savedAt: Date.now(), value: payload });
+        return payload;
+    }).finally(() => workspaceInflightRequests.delete(cacheKey));
+    workspaceInflightRequests.set(cacheKey, requestPromise);
+    return requestPromise;
+}
+
+function invalidateWorkspaceCache(...paths) {
+    for (const key of workspaceResponseCache.keys()) {
+        if (paths.some(path => key.endsWith(`:${path}`) || key.includes(`:${path}`))) {
+            workspaceResponseCache.delete(key);
+        }
+    }
+}
 let itemPublishPreviewUrls = [];
 let itemPublishInitialized = false;
 let itemPublishSubmitting = false;
@@ -87,7 +120,7 @@ const workspacePageNames = {
     dashboard: '经营概览', accounts: '账号管理', billing: '额度与授权',
     'item-publish': '商品发布', items: '商品管理', orders: '订单管理',
     'auto-reply': '自动回复', 'message-filters': '消息过滤', 'items-reply': '指定商品回复',
-    cards: '卡券管理', 'auto-delivery': '自动发货', 'notification-channels': '通知渠道',
+    'auto-delivery': '自动发货', 'notification-channels': '通知渠道',
     'message-notifications': '消息通知', 'online-im': '在线客服', blacklist: '黑名单管理',
     'system-settings': '系统设置', 'user-management': '用户管理', 'activation-codes': '额度卡密管理',
     logs: '系统日志', 'risk-control-logs': '风控日志', 'data-management': '数据管理'
@@ -214,11 +247,8 @@ function showSection(sectionName) {
     case 'message-filters': // 【消息过滤菜单】
         loadMessageFiltersPage();
         break;
-    case 'cards':           // 【卡券管理菜单】
-        loadCards();
-        break;
     case 'auto-delivery':   // 【自动发货菜单】
-        loadDeliveryRules();
+        loadAutoDeliveryWorkspace();
         break;
     case 'notification-channels':  // 【通知渠道菜单】
         loadNotificationChannels();
@@ -8628,19 +8658,11 @@ async function saveAccountNotification() {
 // 加载卡券列表
 async function loadCards() {
     try {
-    const response = await fetch(`${apiBase}/cards`, {
-        headers: {
-        'Authorization': `Bearer ${authToken}`
-        }
-    });
-
-    if (response.ok) {
-        const cards = await response.json();
+        const payload = await fetchWorkspaceJson('/cards', { force: true });
+        const cards = payload.cards || payload || [];
+        autoDeliveryCards = cards;
         renderCardsList(cards);
         updateCardsStats(cards);
-    } else {
-        showToast('加载卡券列表失败', 'danger');
-    }
     } catch (error) {
     console.error('加载卡券列表失败:', error);
     showToast('加载卡券列表失败', 'danger');
@@ -11879,12 +11901,10 @@ let itemDeliveryCardBinding = null;
 
 async function bindItemDeliveryCard(cookieId, itemId, currentCardId = null) {
     try {
-        const response = await fetch(`${apiBase}/cards`, { headers: { 'Authorization': `Bearer ${authToken}` } });
-        if (!response.ok) throw new Error('获取卡券列表失败');
-        const data = await response.json();
+        const data = autoDeliveryCards.length ? autoDeliveryCards : await fetchWorkspaceJson('/cards');
         const cards = data.cards || data || [];
         if (!cards.length) {
-            showToast('请先在卡券管理中创建卡券', 'warning');
+            showToast('请先在自动发货页面新建卡券', 'warning');
             return;
         }
         itemDeliveryCardBinding = { cookieId, itemId };
@@ -11918,11 +11938,202 @@ async function saveItemDeliveryCardBinding() {
         }
         showToast(cardId ? '自动发货卡券已绑定' : '已解除自动发货卡券', 'success');
         bootstrap.Modal.getInstance(document.getElementById('itemDeliveryCardModal'))?.hide();
-        await refreshItemsData();
+        invalidateWorkspaceCache('/items');
+        if (document.getElementById('auto-delivery-section')?.classList.contains('active')) {
+            await loadAutoDeliveryWorkspace(true);
+        } else {
+            await refreshItemsData();
+        }
     } catch (error) {
         console.error('绑定自动发货卡券失败:', error);
         showToast(`绑定失败: ${error.message}`, 'danger');
     }
+}
+
+function mountCardsInsideAutoDelivery() {
+    const host = document.getElementById('autoDeliveryCardsHost');
+    const cardsSection = document.getElementById('cards-section');
+    const cardsBody = cardsSection?.querySelector('.content-body');
+    if (host && cardsBody && !host.contains(cardsBody)) {
+        host.appendChild(cardsBody);
+        cardsBody.classList.remove('content-body');
+    }
+}
+
+async function loadAutoDeliveryWorkspace(force = false) {
+    mountCardsInsideAutoDelivery();
+    const tbody = document.getElementById('autoDeliveryProductsTableBody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">正在加载商品...</td></tr>';
+    try {
+        const [itemsPayload, cardsPayload, accounts, stats, logsPayload] = await Promise.all([
+            fetchWorkspaceJson('/items', { force }),
+            fetchWorkspaceJson('/cards', { force }),
+            fetchWorkspaceJson('/cookies/details', { ttl: 15000, force }),
+            fetchWorkspaceJson('/delivery-rules/stats', { force }),
+            fetchWorkspaceJson('/delivery-logs/recent?limit=10', { force })
+        ]);
+        autoDeliveryProducts = itemsPayload.items || [];
+        autoDeliveryCards = cardsPayload.cards || cardsPayload || [];
+        populateAutoDeliveryAccountFilters(accounts || []);
+        filterAutoDeliveryProducts();
+        renderCardsList(autoDeliveryCards);
+        updateCardsStats(autoDeliveryCards);
+        renderAutoDeliveryRecentLogs(logsPayload.logs || []);
+        document.getElementById('autoDeliveryConfiguredProducts').textContent = autoDeliveryProducts.filter(item => item.auto_delivery_enabled || item.delivery_card_id).length;
+        document.getElementById('autoDeliveryEnabledCards').textContent = autoDeliveryCards.filter(card => card.enabled).length;
+        document.getElementById('todayDeliveries').textContent = stats.today_delivery_count || 0;
+    } catch (error) {
+        console.error('加载自动发货工作台失败:', error);
+        if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-4">${escapeHtml(error.message || '加载失败')}</td></tr>`;
+        showToast('自动发货数据加载失败，请重试', 'danger');
+    }
+}
+
+function populateAutoDeliveryAccountFilters(accounts) {
+    const accountIds = [...new Set((accounts || []).map(account => account.id).filter(Boolean))];
+    for (const selectId of ['autoDeliveryAccountFilter', 'addAutoDeliveryAccount']) {
+        const select = document.getElementById(selectId);
+        if (!select) continue;
+        const current = select.value;
+        const first = selectId === 'autoDeliveryAccountFilter' ? '全部账号' : '请选择账号';
+        select.innerHTML = `<option value="">${first}</option>` + accountIds.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(id)}</option>`).join('');
+        if (accountIds.includes(current)) select.value = current;
+    }
+}
+
+function filterAutoDeliveryProducts() {
+    const accountId = document.getElementById('autoDeliveryAccountFilter')?.value || '';
+    const keyword = (document.getElementById('autoDeliveryProductSearch')?.value || '').trim().toLowerCase();
+    const products = autoDeliveryProducts.filter(item => {
+        if (!item.auto_delivery_enabled && !item.delivery_card_id) return false;
+        if (accountId && item.cookie_id !== accountId) return false;
+        const haystack = `${item.item_title || ''} ${item.item_id || ''}`.toLowerCase();
+        return !keyword || haystack.includes(keyword);
+    });
+    renderAutoDeliveryProducts(products);
+}
+
+function renderAutoDeliveryProducts(products) {
+    const tbody = document.getElementById('autoDeliveryProductsTableBody');
+    if (!tbody) return;
+    if (!products.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">暂无商品，请先点击“添加商品”</td></tr>';
+        return;
+    }
+    tbody.innerHTML = products.map(item => {
+        const title = item.item_title || `商品 ${item.item_id}`;
+        const card = autoDeliveryCards.find(candidate => Number(candidate.id) === Number(item.delivery_card_id));
+        const cardBadge = card
+            ? `<span class="badge ${card.enabled ? 'bg-success' : 'bg-danger'}">${escapeHtml(card.name)}</span>`
+            : '<span class="text-muted">未配置</span>';
+        return `<tr>
+          <td><input class="form-check-input auto-delivery-product-check" type="checkbox" data-cookie-id="${escapeHtml(item.cookie_id)}" data-item-id="${escapeHtml(item.item_id)}"></td>
+          <td><div class="fw-semibold">${escapeHtml(title)}</div><div class="small text-muted">${escapeHtml(getItemDetailText(item.item_detail || '').slice(0, 60))}</div></td>
+          <td>${escapeHtml(item.cookie_id)}</td><td>${escapeHtml(item.item_id)}</td><td>${cardBadge}</td><td>${formatDateTime(item.updated_at)}</td>
+          <td><div class="d-flex gap-1"><button class="btn btn-sm btn-outline-primary" onclick="bindItemDeliveryCard('${escapeHtml(item.cookie_id)}','${escapeHtml(item.item_id)}',${item.delivery_card_id ? Number(item.delivery_card_id) : 'null'})"><i class="bi bi-credit-card me-1"></i>${card ? '更换卡券' : '添加卡券'}</button><button class="btn btn-sm btn-outline-danger" onclick="removeAutoDeliveryProduct('${escapeHtml(item.cookie_id)}','${escapeHtml(item.item_id)}')" title="移出自动发货"><i class="bi bi-x-lg"></i></button></div></td>
+        </tr>`;
+    }).join('');
+}
+
+function toggleAllAutoDeliveryProducts(checked) {
+    document.querySelectorAll('.auto-delivery-product-check').forEach(input => { input.checked = checked; });
+}
+
+function openAddAutoDeliveryProductModal() {
+    populateAutoDeliveryProductChoices();
+    const cardSelect = document.getElementById('addAutoDeliveryCard');
+    cardSelect.innerHTML = '<option value="">暂不绑定，添加后再配置</option>' + autoDeliveryCards.filter(card => card.enabled).map(card => `<option value="${Number(card.id)}">${escapeHtml(card.name)}</option>`).join('');
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('addAutoDeliveryProductModal')).show();
+}
+
+function populateAutoDeliveryProductChoices() {
+    const accountId = document.getElementById('addAutoDeliveryAccount')?.value || '';
+    const select = document.getElementById('addAutoDeliveryProduct');
+    if (!select) return;
+    const products = autoDeliveryProducts.filter(item => (!item.auto_delivery_enabled && !item.delivery_card_id) && (!accountId || item.cookie_id === accountId));
+    select.innerHTML = '<option value="">请选择商品</option>' + products.map(item => `<option value="${escapeHtml(item.cookie_id)}::${escapeHtml(item.item_id)}">${escapeHtml(item.item_title || item.item_id)}</option>`).join('');
+}
+
+async function saveAutoDeliveryProduct() {
+    const selected = document.getElementById('addAutoDeliveryProduct')?.value || '';
+    const [cookieId, itemId] = selected.split('::');
+    const cardValue = document.getElementById('addAutoDeliveryCard')?.value || '';
+    if (!cookieId || !itemId) return showToast('请选择商品', 'warning');
+    try {
+        const enableResponse = await fetch(`${apiBase}/items/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/auto-delivery`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+            body: JSON.stringify({ enabled: true })
+        });
+        const enablePayload = await enableResponse.json().catch(() => ({}));
+        if (!enableResponse.ok) throw new Error(enablePayload.detail || '添加商品失败');
+        if (cardValue) {
+            const bindResponse = await fetch(`${apiBase}/items/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/delivery-card`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+                body: JSON.stringify({ card_id: Number(cardValue) })
+            });
+            const bindPayload = await bindResponse.json().catch(() => ({}));
+            if (!bindResponse.ok) throw new Error(bindPayload.detail || '绑定卡券失败');
+        }
+        bootstrap.Modal.getInstance(document.getElementById('addAutoDeliveryProductModal'))?.hide();
+        invalidateWorkspaceCache('/items');
+        await loadAutoDeliveryWorkspace(true);
+        showToast(cardValue ? '商品已添加并绑定卡券' : '商品已添加，可继续配置卡券', 'success');
+    } catch (error) { showToast(error.message || '添加商品失败', 'danger'); }
+}
+
+async function removeAutoDeliveryProduct(cookieId, itemId) {
+    if (!confirm('确定将该商品移出自动发货吗？已绑定的卡券也会解除。')) return;
+    try {
+        const response = await fetch(`${apiBase}/items/${encodeURIComponent(cookieId)}/${encodeURIComponent(itemId)}/auto-delivery`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+            body: JSON.stringify({ enabled: false })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || '移出失败');
+        invalidateWorkspaceCache('/items'); await loadAutoDeliveryWorkspace(true);
+        showToast('商品已移出自动发货', 'success');
+    } catch (error) { showToast(error.message || '移出自动发货失败', 'danger'); }
+}
+
+async function syncSelectedAutoDeliveryProducts(button) {
+    const selected = Array.from(document.querySelectorAll('.auto-delivery-product-check:checked'));
+    if (!selected.length) return showToast('请先勾选需要同步的商品', 'warning');
+    const groups = new Map();
+    selected.forEach(input => {
+        const list = groups.get(input.dataset.cookieId) || [];
+        list.push(input.dataset.itemId); groups.set(input.dataset.cookieId, list);
+    });
+    const original = button.innerHTML; button.disabled = true; button.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>同步中';
+    try {
+        const batches = [];
+        groups.forEach((itemIds, cookieId) => {
+            for (let index = 0; index < itemIds.length; index += 10) {
+                batches.push([cookieId, itemIds.slice(index, index + 10)]);
+            }
+        });
+        // 后端单批限制 10 件；这里自动拆批，用户可以一次勾选更多商品。
+        const results = [];
+        for (const [cookieId, itemIds] of batches) {
+            const response = await fetch(`${apiBase}/items/sync-details`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+                body: JSON.stringify({ cookie_id: cookieId, item_ids: itemIds })
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload.detail || '同步失败');
+            results.push(payload);
+        }
+        const successCount = results.reduce((sum, result) => sum + (result.success_count || 0), 0);
+        invalidateWorkspaceCache('/items'); await loadAutoDeliveryWorkspace(true);
+        showToast(`商品详情同步完成，成功 ${successCount} 件`, 'success');
+    } catch (error) { showToast(error.message || '同步商品详情失败', 'danger'); }
+    finally { button.disabled = false; button.innerHTML = original; }
+}
+
+function renderAutoDeliveryRecentLogs(logs) {
+    const container = document.getElementById('autoDeliveryRecentLogs');
+    if (!container) return;
+    if (!logs.length) { container.innerHTML = '<div class="text-muted">暂无发货记录</div>'; return; }
+    container.innerHTML = '<div class="table-responsive"><table class="table table-sm"><thead><tr><th>时间</th><th>商品</th><th>买家</th><th>结果</th><th>说明</th></tr></thead><tbody>' + logs.map(log => `<tr><td>${escapeHtml(formatDateTime(log.created_at))}</td><td>${escapeHtml(log.item_id || '-')}</td><td>${escapeHtml(log.buyer_nick || log.buyer_id || '-')}</td><td><span class="badge ${log.status === 'success' ? 'bg-success' : 'bg-secondary'}">${escapeHtml(log.status || '-')}</span></td><td>${escapeHtml(log.reason || '-')}</td></tr>`).join('') + '</tbody></table></div>';
 }
 
 // 加载商品列表
@@ -11957,14 +12168,7 @@ async function refreshItemsData() {
 // 加载Cookie筛选选项
 async function loadCookieFilter(id) {
     try {
-    const response = await fetch(`${apiBase}/cookies/details`, {
-        headers: {
-        'Authorization': `Bearer ${authToken}`
-        }
-    });
-
-    if (response.ok) {
-        const accounts = await response.json();
+        const accounts = await fetchWorkspaceJson('/cookies/details', { ttl: 15000 });
         const select = document.getElementById(id);
 
         // 保存当前选择的值
@@ -12023,7 +12227,6 @@ async function loadCookieFilter(id) {
         if (currentValue) {
         select.value = currentValue;
         }
-    }
     } catch (error) {
     console.error('加载Cookie列表失败:', error);
     showToast('加载账号列表失败', 'danger');
@@ -12033,18 +12236,8 @@ async function loadCookieFilter(id) {
 // 加载所有商品
 async function loadAllItems() {
     try {
-    const response = await fetch(`${apiBase}/items`, {
-        headers: {
-        'Authorization': `Bearer ${authToken}`
-        }
-    });
-
-    if (response.ok) {
-        const data = await response.json();
+        const data = await fetchWorkspaceJson('/items');
         displayItems(data.items);
-    } else {
-        throw new Error('获取商品列表失败');
-    }
     } catch (error) {
     console.error('加载商品列表失败:', error);
     showToast('加载商品列表失败', 'danger');
@@ -12061,18 +12254,8 @@ async function loadItemsByCookie() {
     }
 
     try {
-    const response = await fetch(`${apiBase}/items/cookie/${encodeURIComponent(cookieId)}`, {
-        headers: {
-        'Authorization': `Bearer ${authToken}`
-        }
-    });
-
-    if (response.ok) {
-        const data = await response.json();
+        const data = await fetchWorkspaceJson(`/items/cookie/${encodeURIComponent(cookieId)}`);
         displayItems(data.items);
-    } else {
-        throw new Error('获取商品列表失败');
-    }
     } catch (error) {
     console.error('加载商品列表失败:', error);
     showToast('加载商品列表失败', 'danger');
@@ -12123,16 +12306,35 @@ function getItemDetailText(itemDetail) {
     if (!itemDetail) return '';
 
     try {
-        // 尝试解析JSON
         const detail = JSON.parse(itemDetail);
-        if (detail.content) {
-            return detail.content;
-        }
-        return itemDetail;
+        const candidates = [
+            detail.content, detail.description, detail.desc, detail.item_description,
+            detail.itemTextDTO?.desc, detail.data?.item?.description,
+            detail.data?.item?.desc, detail.data?.itemDO?.desc
+        ];
+        const readable = candidates.find(value => typeof value === 'string' && value.trim());
+        if (readable) return readable.trim();
+        return Object.entries(detail)
+            .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+            .slice(0, 12)
+            .map(([key, value]) => `${key}: ${value}`)
+            .join('\n');
     } catch (e) {
-        // 如果不是JSON格式，直接返回原文本
         return itemDetail;
     }
+}
+
+function getEditableItemFields(item) {
+    const parsed = item?.item_detail_parsed && typeof item.item_detail_parsed === 'object'
+        ? item.item_detail_parsed
+        : (() => { try { return JSON.parse(item?.item_detail || '{}'); } catch (_) { return {}; } })();
+    return {
+        title: item?.item_title || parsed.title || parsed.item_title || '',
+        category: item?.item_category || parsed.category || parsed.item_category || '',
+        price: item?.item_price || parsed.price || parsed.item_price || '',
+        description: item?.item_description || parsed.description || parsed.desc || parsed.content || getItemDetailText(item?.item_detail || ''),
+        notes: parsed.seller_notes || parsed.notes || ''
+    };
 }
 
 // 显示当前页的商品数据
@@ -12140,7 +12342,7 @@ function displayCurrentPageItems() {
     const tbody = document.getElementById('itemsTableBody');
 
     if (!filteredItemsData || filteredItemsData.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted">暂无商品数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">暂无商品数据</td></tr>';
         resetItemsSelection();
         return;
     }
@@ -12164,22 +12366,6 @@ function displayCurrentPageItems() {
             itemDetailDisplay = detailText.substring(0, 50) + (detailText.length > 50 ? '...' : '');
         }
 
-        // 多规格状态显示
-        const isMultiSpec = item.is_multi_spec;
-        const multiSpecDisplay = isMultiSpec ?
-            '<span class="badge bg-success">多规格</span>' :
-            '<span class="badge bg-secondary">普通</span>';
-
-        // 多数量发货状态显示
-        const isMultiQuantityDelivery = item.multi_quantity_delivery;
-        const multiQuantityDeliveryDisplay = isMultiQuantityDelivery ?
-            '<span class="badge bg-success">已开启</span>' :
-            '<span class="badge bg-secondary">已关闭</span>';
-
-        const boundCardDisplay = item.delivery_card_id
-            ? `<span class="badge ${item.delivery_card_enabled === false ? 'bg-danger' : 'bg-primary'}" title="${escapeHtml(item.delivery_card_name || '卡券不可用')}">${escapeHtml(item.delivery_card_name || '卡券不可用')}</span>`
-            : '<span class="text-muted">未绑定</span>';
-
         return `
             <tr>
             <td>
@@ -12193,9 +12379,6 @@ function displayCurrentPageItems() {
             <td title="${escapeHtml(item.item_title || '未设置')}">${escapeHtml(itemTitleDisplay)}</td>
             <td title="${escapeHtml(getItemDetailText(item.item_detail || ''))}">${escapeHtml(itemDetailDisplay)}</td>
             <td>${escapeHtml(item.item_price || '未设置')}</td>
-            <td>${multiSpecDisplay}</td>
-            <td>${multiQuantityDeliveryDisplay}</td>
-            <td>${boundCardDisplay}</td>
             <td>${formatDateTime(item.updated_at)}</td>
             <td>
                 <div class="btn-group" role="group">
@@ -12204,15 +12387,6 @@ function displayCurrentPageItems() {
                 </button>
                 <button class="btn btn-sm btn-outline-danger" onclick="deleteItem('${escapeHtml(item.cookie_id)}', '${escapeHtml(item.item_id)}', '${escapeHtml(item.item_title || item.item_id)}')" title="删除">
                     <i class="bi bi-trash"></i>
-                </button>
-                <button class="btn btn-sm btn-outline-primary" onclick="bindItemDeliveryCard('${escapeHtml(item.cookie_id)}', '${escapeHtml(item.item_id)}', ${item.delivery_card_id ? Number(item.delivery_card_id) : 'null'})" title="绑定自动发货卡券">
-                    <i class="bi bi-credit-card"></i>
-                </button>
-                <button class="btn btn-sm ${isMultiSpec ? 'btn-warning' : 'btn-success'}" onclick="toggleItemMultiSpec('${escapeHtml(item.cookie_id)}', '${escapeHtml(item.item_id)}', ${!isMultiSpec})" title="${isMultiSpec ? '关闭多规格' : '开启多规格'}">
-                    <i class="bi ${isMultiSpec ? 'bi-toggle-on' : 'bi-toggle-off'}"></i>
-                </button>
-                <button class="btn btn-sm ${isMultiQuantityDelivery ? 'btn-warning' : 'btn-success'}" onclick="toggleItemMultiQuantityDelivery('${escapeHtml(item.cookie_id)}', '${escapeHtml(item.item_id)}', ${!isMultiQuantityDelivery})" title="${isMultiQuantityDelivery ? '关闭多数量发货' : '开启多数量发货'}">
-                    <i class="bi ${isMultiQuantityDelivery ? 'bi-box-arrow-down' : 'bi-box-arrow-up'}"></i>
                 </button>
                 </div>
             </td>
@@ -12439,6 +12613,7 @@ async function getAllItemsFromAccount() {
         const data = await response.json();
         if (data.success) {
         showToast(`成功同步第${pageNumber}页 ${data.current_count} 个商品，最新详情已更新`, 'success');
+        invalidateWorkspaceCache('/items');
         // 刷新商品列表（保持筛选器选择）
         await refreshItemsData();
         } else {
@@ -12492,6 +12667,7 @@ async function getAllItemsFromAccountAll() {
             `成功同步 ${data.total_count} 个商品（共${data.total_pages}页），最新详情已更新` :
             `成功同步商品信息，最新详情已更新`;
         showToast(message, 'success');
+        invalidateWorkspaceCache('/items');
         // 刷新商品列表（保持筛选器选择）
         await refreshItemsData();
         } else {
@@ -12530,7 +12706,12 @@ async function editItem(cookieId, itemId) {
         document.getElementById('editItemId').value = item.item_id;
         document.getElementById('editItemCookieIdDisplay').value = item.cookie_id;
         document.getElementById('editItemIdDisplay').value = item.item_id;
-        document.getElementById('editItemDetail').value = item.item_detail || '';
+        const fields = getEditableItemFields(item);
+        document.getElementById('editItemTitle').value = fields.title;
+        document.getElementById('editItemCategory').value = fields.category;
+        document.getElementById('editItemPrice').value = fields.price;
+        document.getElementById('editItemDescription').value = fields.description;
+        document.getElementById('editItemDetail').value = fields.notes;
 
         // 显示模态框
         const modal = new bootstrap.Modal(document.getElementById('editItemModal'));
@@ -12548,10 +12729,14 @@ async function editItem(cookieId, itemId) {
 async function saveItemDetail() {
     const cookieId = document.getElementById('editItemCookieId').value;
     const itemId = document.getElementById('editItemId').value;
-    const itemDetail = document.getElementById('editItemDetail').value.trim();
+    const title = document.getElementById('editItemTitle').value.trim();
+    const category = document.getElementById('editItemCategory').value.trim();
+    const price = document.getElementById('editItemPrice').value.trim();
+    const description = document.getElementById('editItemDescription').value.trim();
+    const notes = document.getElementById('editItemDetail').value.trim();
 
-    if (!itemDetail) {
-    showToast('请输入商品详情', 'warning');
+    if (!title || !description) {
+    showToast('请填写商品标题和商品描述', 'warning');
     return;
     }
 
@@ -12562,9 +12747,8 @@ async function saveItemDetail() {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${authToken}`
         },
-        body: JSON.stringify({
-        item_detail: itemDetail
-        })
+        body: JSON.stringify({ item_title: title, item_category: category, item_price: price,
+            item_description: description, seller_notes: notes })
     });
 
     if (response.ok) {
@@ -12575,6 +12759,7 @@ async function saveItemDetail() {
         modal.hide();
 
         // 刷新列表（保持筛选器选择）
+        invalidateWorkspaceCache('/items');
         await refreshItemsData();
     } else {
         const error = await response.text();

@@ -85,12 +85,6 @@
           <span>指定商品回复</span>
         </button>
       </div>
-      <div class="nav-item" data-menu-id="cards">
-        <button type="button" class="nav-link" onclick="showSection('cards')">
-          <i class="bi bi-credit-card"></i>
-          <span>卡券管理</span>
-        </button>
-      </div>
       <div class="nav-item" data-menu-id="auto-delivery">
         <button type="button" class="nav-link" onclick="showSection('auto-delivery')">
           <i class="bi bi-truck"></i>
@@ -758,7 +752,7 @@
               <div class="card-header d-flex justify-content-between align-items-center">
                 <div>
                   <h5 class="mb-1">发布表单</h5>
-                  <div class="text-muted small">第一版支持单商品发布、多图上传、价格与运费配置。</div>
+                  <div class="text-muted small">支持单商品发布、多图上传、价格与运费配置；底层发布接口当前仅支持单规格。</div>
                 </div>
                 <div class="d-flex align-items-center gap-2">
                   <span class="badge text-bg-light border" id="publishMaterialModeBadge">新建素材</span>
@@ -1000,7 +994,7 @@
             <div class="d-flex align-items-center gap-3">
               <input type="text" class="form-control" id="itemSearchInput"
                      placeholder="搜索商品标题或详情..." style="width: 300px;">
-              <h5 class="mb-0">商品列表（为商品绑定卡券后即可自动发货）</h5>
+              <h5 class="mb-0">商品列表</h5>
             </div>
             <button class="btn btn-sm btn-outline-danger" onclick="batchDeleteItems()" id="batchDeleteBtn" disabled>
               <i class="bi bi-trash"></i> 批量删除
@@ -1024,16 +1018,13 @@
                     <th style="width: 16%">商品标题</th>
                     <th style="width: 18%">商品详情</th>
                     <th style="width: 18%">商品价格</th>
-                    <th style="width: 8%">多规格</th>
-                    <th style="width: 8%">多数量发货</th>
-                    <th style="width: 12%">自动发货卡券</th>
                     <th style="width: 10%">更新时间</th>
                     <th style="width: 15%">操作</th>
                   </tr>
                 </thead>
                 <tbody id="itemsTableBody">
                   <tr>
-                    <td colspan="11" class="text-center text-muted">加载中...</td>
+                    <td colspan="8" class="text-center text-muted">加载中...</td>
                   </tr>
                 </tbody>
               </table>
@@ -1721,79 +1712,75 @@
           <i class="bi bi-truck me-2"></i>
           自动发货
         </h2>
-        <p class="text-muted mb-0">根据商品关键字自动匹配卡券进行发货</p>
+        <p class="text-muted mb-0">先添加商品，再为商品配置卡券；订单满足条件后自动发货</p>
       </div>
       <div class="content-body">
-        <!-- 发货规则列表 -->
-        <div class="row">
-          <div class="col-md-8">
-            <div class="card">
-              <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">发货规则</h5>
-                <button class="btn btn-primary btn-sm" onclick="showAddDeliveryRuleModal()">
-                  <i class="bi bi-plus-lg me-1"></i>添加规则
-                </button>
-              </div>
-              <div class="card-body">
-                <div class="table-responsive">
-                  <table class="table table-hover">
-                    <thead>
-                      <tr>
-                        <th>商品关键字</th>
-                        <th>匹配卡券</th>
-                        <th>卡券类型</th>
-                        <!-- <th>发货数量</th> 隐藏发货数量列 -->
-                        <th>状态</th>
-                        <th>已发货次数</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody id="deliveryRulesTableBody">
-                      <tr>
-                        <td colspan="7" class="text-center py-4 text-muted">
-                          <i class="bi bi-truck fs-1 d-block mb-3"></i>
-                          <h5>暂无发货规则</h5>
-                          <p class="mb-0">点击"添加规则"开始配置自动发货规则</p>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+        <div class="alert alert-info d-flex align-items-start gap-2">
+          <i class="bi bi-info-circle mt-1"></i>
+          <div><strong>配置顺序：</strong>添加商品 → 同步商品详情 → 在商品上添加卡券。原有关键词规则继续兼容运行，但不再作为新用户的配置入口。</div>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div>
+              <h5 class="mb-1">自动发货商品</h5>
+              <div class="text-muted small">只有绑定了可用卡券的商品才会进入自动发货流程</div>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+              <button class="btn btn-outline-primary btn-sm" type="button" onclick="syncSelectedAutoDeliveryProducts(this)">
+                <i class="bi bi-arrow-repeat me-1"></i>同步商品详情
+              </button>
+              <button class="btn btn-primary btn-sm" type="button" onclick="openAddAutoDeliveryProductModal()">
+                <i class="bi bi-plus-lg me-1"></i>添加商品
+              </button>
             </div>
           </div>
-          <div class="col-md-4">
-            <div class="card">
-              <div class="card-header">
-                <h5 class="mb-0">发货统计</h5>
+          <div class="card-body">
+            <div class="row g-3 mb-3">
+              <div class="col-md-5">
+                <label class="form-label" for="autoDeliveryAccountFilter">闲鱼账号</label>
+                <select class="form-select" id="autoDeliveryAccountFilter" onchange="filterAutoDeliveryProducts()">
+                  <option value="">全部账号</option>
+                </select>
               </div>
-              <div class="card-body">
-                <div class="stat-item mb-3">
-                  <div class="d-flex justify-content-between">
-                    <span>总规则数</span>
-                    <span class="badge bg-primary" id="totalRules">0</span>
-                  </div>
-                </div>
-                <div class="stat-item mb-3">
-                  <div class="d-flex justify-content-between">
-                    <span>启用规则</span>
-                    <span class="badge bg-success" id="activeRules">0</span>
-                  </div>
-                </div>
-                <div class="stat-item mb-3">
-                  <div class="d-flex justify-content-between">
-                    <span>今日发货</span>
-                    <span class="badge bg-info" id="todayDeliveries">0</span>
-                  </div>
-                </div>
-                <div class="stat-item">
-                  <div class="d-flex justify-content-between">
-                    <span>总发货量</span>
-                    <span class="badge bg-warning" id="totalDeliveries">0</span>
-                  </div>
-                </div>
+              <div class="col-md-7">
+                <label class="form-label" for="autoDeliveryProductSearch">搜索商品</label>
+                <input class="form-control" id="autoDeliveryProductSearch" placeholder="搜索商品名称或商品 ID" oninput="filterAutoDeliveryProducts()">
               </div>
             </div>
+            <div class="table-responsive">
+              <table class="table table-hover align-middle">
+                <thead><tr>
+                  <th><input type="checkbox" id="selectAllAutoDeliveryProducts" onchange="toggleAllAutoDeliveryProducts(this.checked)"></th>
+                  <th>商品</th><th>账号</th><th>商品 ID</th><th>已配置卡券</th><th>更新时间</th><th>操作</th>
+                </tr></thead>
+                <tbody id="autoDeliveryProductsTableBody">
+                  <tr><td colspan="7" class="text-center text-muted py-4">正在加载商品...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <div><h5 class="mb-1">卡券库</h5><div class="text-muted small">卡券统一在自动发货内维护</div></div>
+            <button class="btn btn-primary btn-sm" onclick="showAddCardModal()"><i class="bi bi-plus-lg me-1"></i>新建卡券</button>
+          </div>
+          <div class="card-body" id="autoDeliveryCardsHost"></div>
+        </div>
+
+        <div class="row g-4">
+          <div class="col-lg-8">
+            <div class="card h-100"><div class="card-header"><h5 class="mb-0">最近发货记录</h5></div><div class="card-body"><div id="autoDeliveryRecentLogs" class="text-muted">暂无发货记录</div></div></div>
+          </div>
+          <div class="col-lg-4">
+            <div class="card h-100"><div class="card-header"><h5 class="mb-0">发货统计</h5></div><div class="card-body">
+              <div class="stat-item mb-3 d-flex justify-content-between"><span>已配置商品</span><span class="badge bg-primary" id="autoDeliveryConfiguredProducts">0</span></div>
+              <div class="stat-item mb-3 d-flex justify-content-between"><span>可用卡券</span><span class="badge bg-success" id="autoDeliveryEnabledCards">0</span></div>
+              <div class="stat-item d-flex justify-content-between"><span>今日发货</span><span class="badge bg-info" id="todayDeliveries">0</span></div>
+              <span class="d-none" id="totalRules">0</span><span class="d-none" id="activeRules">0</span><span class="d-none" id="totalDeliveries">0</span>
+            </div></div>
           </div>
         </div>
       </div>
@@ -5106,7 +5093,7 @@
 
   <!-- JS依赖 -->
   <script src="/static/lib/bootstrap/bootstrap.bundle.min.js"></script>
-  <script src="/static/js/app.js?v=1.2.9"></script>
+  <script src="/static/js/app.js?v=1.3.0"></script>
 
   <!-- 默认回复管理模态框 -->
   <div class="modal fade" id="defaultReplyModal" tabindex="-1" aria-labelledby="defaultReplyModalLabel" aria-hidden="true">
@@ -5233,6 +5220,10 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body">
+          <div class="alert alert-info">
+            <i class="bi bi-info-circle me-1"></i>
+            这里编辑的是鱼智云用于展示、AI 回复和自动发货的本地商品资料，不会修改闲鱼在售商品。
+          </div>
           <form id="editItemForm">
             <input type="hidden" id="editItemCookieId">
             <input type="hidden" id="editItemId">
@@ -5248,14 +5239,12 @@
               </div>
             </div>
 
-            <div class="mb-3">
-              <label for="editItemDetail" class="form-label">商品详情 <span class="text-danger">*</span></label>
-              <textarea class="form-control" id="editItemDetail" rows="20"
-                        placeholder="请输入商品详情内容..."></textarea>
-              <div class="form-text">
-                <i class="bi bi-info-circle me-1"></i>
-                请输入商品详情内容，这些内容将用于自动发货时的关键词匹配。
-              </div>
+            <div class="row g-3">
+              <div class="col-12"><label for="editItemTitle" class="form-label">商品标题</label><input class="form-control" id="editItemTitle" maxlength="120" placeholder="输入商品标题"></div>
+              <div class="col-md-7"><label for="editItemCategory" class="form-label">商品类目</label><input class="form-control" id="editItemCategory" maxlength="120" placeholder="例如：数码配件、图书、服饰"></div>
+              <div class="col-md-5"><label for="editItemPrice" class="form-label">商品价格</label><div class="input-group"><span class="input-group-text">¥</span><input class="form-control" id="editItemPrice" maxlength="80" placeholder="例如：99.00"></div></div>
+              <div class="col-12"><label for="editItemDescription" class="form-label">商品描述</label><textarea class="form-control" id="editItemDescription" rows="7" maxlength="5000" placeholder="输入商品描述、成色、发货说明等"></textarea></div>
+              <div class="col-12"><label for="editItemDetail" class="form-label">补充资料</label><textarea class="form-control" id="editItemDetail" rows="5" maxlength="6000" placeholder="填写详情页没有但 AI 或自动发货需要参考的信息"></textarea><div class="form-text">系统会自动提取历史 JSON 中可读的标题、描述和价格，不再要求用户编辑 JSON。</div></div>
             </div>
           </form>
         </div>
@@ -5267,6 +5256,22 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- 添加自动发货商品 -->
+  <div class="modal fade" id="addAutoDeliveryProductModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title"><i class="bi bi-box-seam me-2"></i>添加自动发货商品</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p class="text-muted">从已同步商品中选择一件，再为它配置卡券。若列表中没有目标商品，请先到商品管理同步。</p>
+        <div class="row g-3">
+          <div class="col-md-5"><label class="form-label" for="addAutoDeliveryAccount">闲鱼账号</label><select class="form-select" id="addAutoDeliveryAccount" onchange="populateAutoDeliveryProductChoices()"><option value="">请选择账号</option></select></div>
+          <div class="col-md-7"><label class="form-label" for="addAutoDeliveryProduct">商品</label><select class="form-select" id="addAutoDeliveryProduct"><option value="">请选择商品</option></select></div>
+          <div class="col-12"><label class="form-label" for="addAutoDeliveryCard">卡券</label><select class="form-select" id="addAutoDeliveryCard"><option value="">暂不绑定，添加后再配置</option></select></div>
+        </div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">取消</button><button class="btn btn-primary" onclick="saveAutoDeliveryProduct()"><i class="bi bi-check-lg me-1"></i>添加商品</button></div>
+    </div></div>
   </div>
 
   <!-- 商品自动发货卡券绑定 -->

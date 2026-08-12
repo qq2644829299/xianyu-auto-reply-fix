@@ -630,6 +630,7 @@ class DBManager:
                 item_detail TEXT,
                 is_multi_spec BOOLEAN DEFAULT FALSE,
                 delivery_card_id INTEGER,
+                auto_delivery_enabled BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE,
@@ -653,6 +654,15 @@ class DBManager:
                 logger.info("正在为 item_info 表添加 delivery_card_id 列...")
                 self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN delivery_card_id INTEGER")
                 logger.info("item_info 表 delivery_card_id 列添加完成")
+
+            # 自动发货是否在商品维度启用。旧数据中已经绑定卡券的商品保持原有可发货行为。
+            try:
+                self._execute_sql(cursor, "SELECT auto_delivery_enabled FROM item_info LIMIT 1")
+            except sqlite3.OperationalError:
+                logger.info("正在为 item_info 表添加 auto_delivery_enabled 列...")
+                self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN auto_delivery_enabled BOOLEAN DEFAULT FALSE")
+                self._execute_sql(cursor, "UPDATE item_info SET auto_delivery_enabled = TRUE WHERE delivery_card_id IS NOT NULL")
+                logger.info("item_info 表 auto_delivery_enabled 列添加完成")
 
             # 创建自动发货规则表
             cursor.execute('''
@@ -6803,9 +6813,11 @@ Cookie数量: {cookie_count}
                 cursor = self.conn.cursor()
                 cursor.execute('''
                 UPDATE item_info
-                SET delivery_card_id = ?, updated_at = CURRENT_TIMESTAMP
+                SET delivery_card_id = ?,
+                    auto_delivery_enabled = CASE WHEN ? IS NULL THEN auto_delivery_enabled ELSE TRUE END,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE cookie_id = ? AND item_id = ?
-                ''', (card_id, cookie_id, item_id))
+                ''', (card_id, card_id, cookie_id, item_id))
                 if cursor.rowcount <= 0:
                     return False
                 self.conn.commit()
@@ -6813,6 +6825,28 @@ Cookie数量: {cookie_count}
                 return True
         except Exception as e:
             logger.error(f"更新商品自动发货卡券失败: {e}")
+            self.conn.rollback()
+            return False
+
+    def update_item_auto_delivery_enabled(self, cookie_id: str, item_id: str, enabled: bool) -> bool:
+        """启用或移出本地商品的自动发货列表，不会修改闲鱼商品。"""
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE item_info
+                    SET auto_delivery_enabled = ?,
+                        delivery_card_id = CASE WHEN ? THEN delivery_card_id ELSE NULL END,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE cookie_id = ? AND item_id = ?
+                ''', (bool(enabled), bool(enabled), cookie_id, item_id))
+                if cursor.rowcount <= 0:
+                    return False
+                self.conn.commit()
+                logger.info(f"更新商品自动发货状态成功: {item_id} -> {bool(enabled)}")
+                return True
+        except Exception as e:
+            logger.error(f"更新商品自动发货状态失败: {e}")
             self.conn.rollback()
             return False
 
@@ -6870,6 +6904,62 @@ Cookie数量: {cookie_count}
 
         except Exception as e:
             logger.error(f"获取Cookie商品信息失败: {e}")
+            return []
+
+    def get_items_with_delivery_cards(self, cookie_ids: Optional[List[str]] = None,
+                                      user_id: Optional[int] = None) -> List[Dict]:
+        """批量读取商品及其绑定卡券，避免页面逐商品查询卡券。
+
+        ``delivery_card_id`` 是本地自动发货资料的一部分。为了保持租户隔离，传入
+        ``user_id`` 时只关联该用户自己的卡券；已删除或不属于该用户的卡券会以未绑定
+        的状态返回。
+        """
+        normalized_cookie_ids = [str(value).strip() for value in (cookie_ids or []) if str(value).strip()]
+        if cookie_ids is not None and not normalized_cookie_ids:
+            return []
+
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                card_join = "LEFT JOIN cards AS c ON c.id = i.delivery_card_id"
+                params: List[Any] = []
+                if user_id is not None:
+                    card_join += " AND c.user_id = ?"
+                    params.append(user_id)
+
+                where_clause = ""
+                if normalized_cookie_ids:
+                    placeholders = ", ".join("?" for _ in normalized_cookie_ids)
+                    where_clause = f"WHERE i.cookie_id IN ({placeholders})"
+                    params.extend(normalized_cookie_ids)
+
+                cursor.execute(f'''
+                    SELECT i.*, c.name AS _delivery_card_name,
+                           c.enabled AS _delivery_card_enabled
+                    FROM item_info AS i
+                    {card_join}
+                    {where_clause}
+                    ORDER BY i.updated_at DESC
+                ''', params)
+
+                columns = [description[0] for description in cursor.description]
+                items: List[Dict] = []
+                for row in cursor.fetchall():
+                    item_info = dict(zip(columns, row))
+                    card_name = item_info.pop('_delivery_card_name', None)
+                    card_enabled = item_info.pop('_delivery_card_enabled', None)
+                    item_info['delivery_card_name'] = card_name
+                    item_info['delivery_card_enabled'] = bool(card_enabled) if card_name else False
+
+                    if item_info.get('item_detail'):
+                        try:
+                            item_info['item_detail_parsed'] = json.loads(item_info['item_detail'])
+                        except (TypeError, json.JSONDecodeError):
+                            item_info['item_detail_parsed'] = {}
+                    items.append(item_info)
+                return items
+        except Exception as e:
+            logger.error(f"批量获取商品及绑定卡券失败: {e}")
             return []
 
     def get_all_items(self) -> List[Dict]:
@@ -6938,6 +7028,61 @@ Cookie数量: {cookie_count}
 
         except Exception as e:
             logger.error(f"更新商品详情失败: {e}")
+            self.conn.rollback()
+            return False
+
+    def update_item_local_fields(self, cookie_id: str, item_id: str,
+                                 fields: Dict[str, Any]) -> bool:
+        """更新本地商品资料，不会调用闲鱼接口或修改在线商品。
+
+        ``fields`` 使用面向表单的字段名：title、description、category、price、detail；
+        同时保留 ``item_detail`` 以兼容旧客户端。
+        """
+        field_mapping = {
+            'title': 'item_title',
+            'item_title': 'item_title',
+            'description': 'item_description',
+            'item_description': 'item_description',
+            'category': 'item_category',
+            'item_category': 'item_category',
+            'price': 'item_price',
+            'item_price': 'item_price',
+            'detail': 'item_detail',
+            'item_detail': 'item_detail',
+        }
+        updates: List[str] = []
+        params: List[Any] = []
+        for request_field, column_name in field_mapping.items():
+            if request_field not in fields:
+                continue
+            value = fields[request_field]
+            if request_field == 'detail' and isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False)
+            elif value is not None and not isinstance(value, str):
+                value = str(value)
+            updates.append(f"{column_name} = ?")
+            params.append(value if value is not None else '')
+
+        if not updates:
+            return False
+
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                params.extend([cookie_id, item_id])
+                cursor.execute(
+                    f"UPDATE item_info SET {', '.join(updates)} WHERE cookie_id = ? AND item_id = ?",
+                    params,
+                )
+                if cursor.rowcount <= 0:
+                    logger.warning(f"未找到要更新的本地商品资料: {item_id}")
+                    return False
+                self.conn.commit()
+                logger.info(f"本地商品资料已更新: {item_id}, fields={list(fields.keys())}")
+                return True
+        except Exception as e:
+            logger.error(f"更新本地商品资料失败: {e}")
             self.conn.rollback()
             return False
 

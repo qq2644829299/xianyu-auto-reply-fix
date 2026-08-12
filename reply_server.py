@@ -1322,7 +1322,9 @@ async def health_check():
 
         # 获取系统状态
         import psutil
-        cpu_percent = psutil.cpu_percent(interval=1)
+        # interval=1 会让每次 Docker 健康检查阻塞事件循环整整一秒；单 worker 下会
+        # 连带拖慢同一时刻的所有页面接口。使用非阻塞采样即可满足健康状态展示。
+        cpu_percent = psutil.cpu_percent(interval=None)
         memory_info = psutil.virtual_memory()
 
         status = {
@@ -4087,6 +4089,69 @@ def _ensure_cookie_access(cid: str, current_user: Dict[str, Any]) -> str:
     if cleaned_cid not in user_cookies:
         raise HTTPException(status_code=403, detail="无权限操作该Cookie")
     return cleaned_cid
+
+
+_item_detail_sync_locks: Dict[Tuple[str, str], asyncio.Lock] = {}
+_item_detail_sync_locks_guard = asyncio.Lock()
+_MAX_ITEM_DETAIL_SYNC_BATCH_SIZE = 10
+_MAX_ITEM_DETAIL_SYNC_CONCURRENCY = 2
+
+
+async def _get_item_detail_sync_lock(cookie_id: str, item_id: str) -> asyncio.Lock:
+    """同一账号的同一商品只允许一个强制详情同步任务运行。"""
+    key = (cookie_id, item_id)
+    async with _item_detail_sync_locks_guard:
+        lock = _item_detail_sync_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _item_detail_sync_locks[key] = lock
+        return lock
+
+
+async def _sync_single_item_detail(cookie_id: str, item_id: str) -> Dict[str, Any]:
+    """通过已在线的账号实例强制刷新一件商品的本地详情。"""
+    normalized_item_id = str(item_id or '').strip()
+    result: Dict[str, Any] = {'item_id': normalized_item_id, 'success': False}
+    if not re.fullmatch(r'\d{5,32}', normalized_item_id):
+        result['error'] = '商品 ID 格式不正确'
+        return result
+
+    # 详情只能覆盖已同步到本地的商品。这样不会制造“仅 ID、没有名称”的难懂记录。
+    if not db_manager.get_item_info(cookie_id, normalized_item_id):
+        result['error'] = '该商品尚未在本地商品列表中，请先添加或同步商品'
+        return result
+
+    live_instance = _get_chat_live_instance(cookie_id)
+    if not live_instance:
+        result['error'] = '账号未运行，暂无法同步商品详情'
+        return result
+
+    item_lock = await _get_item_detail_sync_lock(cookie_id, normalized_item_id)
+    async with item_lock:
+        try:
+            detail = await _run_live_instance_on_manager_loop(
+                cookie_id,
+                lambda: live_instance.fetch_item_detail_from_api(
+                    normalized_item_id, force_refresh=True
+                ),
+                timeout=50,
+            )
+            if not detail or not str(detail).strip():
+                result['error'] = '未获取到商品详情，请检查账号状态、商品状态或稍后重试'
+                return result
+
+            if not db_manager.update_item_detail(cookie_id, normalized_item_id, str(detail).strip()):
+                result['error'] = '详情已获取，但保存本地资料失败'
+                return result
+            result.update({'success': True, 'detail_length': len(str(detail).strip())})
+            return result
+        except HTTPException as exc:
+            result['error'] = str(exc.detail)
+            return result
+        except Exception as exc:
+            logger.warning(f"同步商品详情失败: {cookie_id}/{normalized_item_id} - {mask_sensitive_text(exc)}")
+            result['error'] = '同步商品详情失败，请稍后重试'
+            return result
 
 
 def _get_chat_live_instance(cookie_id: str):
@@ -10196,17 +10261,10 @@ def get_all_items(current_user: Dict[str, Any] = Depends(get_current_user)):
         from db_manager import db_manager
         user_cookies = db_manager.get_all_cookies(user_id)
 
-        all_items = []
-        for cookie_id in user_cookies.keys():
-            items = db_manager.get_items_by_cookie(cookie_id)
-            for item in items:
-                card_id = item.get('delivery_card_id')
-                if card_id:
-                    card = db_manager.get_card_by_id(card_id, user_id)
-                    # 已删除或不属于当前用户的卡券不会暴露给页面，也不会继续自动发货。
-                    item['delivery_card_name'] = card.get('name') if card else None
-                    item['delivery_card_enabled'] = card.get('enabled') if card else False
-            all_items.extend(items)
+        # 单条商品一个卡券查询会在商品较多时造成 N+1 查询；一次关联读取即可。
+        all_items = db_manager.get_items_with_delivery_cards(
+            list(user_cookies.keys()), user_id=user_id
+        )
 
         return {"items": all_items}
     except Exception as e:
@@ -11146,13 +11204,7 @@ def get_items_by_cookie(cookie_id: str, current_user: Dict[str, Any] = Depends(g
         if cookie_id not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限访问该Cookie")
 
-        items = db_manager.get_items_by_cookie(cookie_id)
-        for item in items:
-            card_id = item.get('delivery_card_id')
-            if card_id:
-                card = db_manager.get_card_by_id(card_id, user_id)
-                item['delivery_card_name'] = card.get('name') if card else None
-                item['delivery_card_enabled'] = card.get('enabled') if card else False
+        items = db_manager.get_items_with_delivery_cards([cookie_id], user_id=user_id)
         return {"items": items}
     except HTTPException:
         raise
@@ -11183,11 +11235,42 @@ def get_item_detail(cookie_id: str, item_id: str, current_user: Dict[str, Any] =
 
 
 class ItemDetailUpdate(BaseModel):
-    item_detail: str
+    """本地商品资料编辑请求。
+
+    ``item_detail`` 是兼容旧版 JSON 编辑器的字段。新界面应使用结构化字段；这些
+    内容只更新本地资料/自动回复上下文，不会向闲鱼修改在售商品。
+    """
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    price: Optional[Any] = None
+    detail: Optional[Any] = None
+    # 当前商品编辑表单提交的字段名。
+    item_title: Optional[str] = None
+    item_description: Optional[str] = None
+    item_category: Optional[str] = None
+    item_price: Optional[Any] = None
+    seller_notes: Optional[str] = None
+    # 旧版 JSON 编辑器字段，继续兼容。
+    item_detail: Optional[str] = None
 
 
 class ItemDeliveryCardUpdate(BaseModel):
     card_id: Optional[int] = None
+
+
+class ItemAutoDeliveryUpdate(BaseModel):
+    enabled: bool
+
+
+class ItemDetailSyncRequest(BaseModel):
+    cookie_id: str
+    item_id: str
+
+
+class ItemDetailsSyncRequest(BaseModel):
+    cookie_id: str
+    item_ids: List[str]
 
 
 @app.put("/items/{cookie_id}/{item_id}")
@@ -11197,7 +11280,7 @@ def update_item_detail(
     update_data: ItemDetailUpdate,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """更新商品详情"""
+    """更新本地商品资料，不会修改闲鱼在售商品。"""
     try:
         # 检查cookie是否属于当前用户
         user_id = current_user['user_id']
@@ -11207,15 +11290,104 @@ def update_item_detail(
         if cookie_id not in user_cookies:
             raise HTTPException(status_code=403, detail="无权限操作该Cookie")
 
-        success = db_manager.update_item_detail(cookie_id, item_id, update_data.item_detail)
+        fields = update_data.model_dump(exclude_unset=True)
+        if not fields:
+            raise HTTPException(status_code=400, detail="请至少填写一个需要保存的字段")
+
+        # 新版 detail 与旧版 item_detail 都映射到本地详情字段；detail 优先，避免同一
+        # 列在一条 SQL 中被重复更新。
+        if 'detail' in fields:
+            fields['item_detail'] = fields.pop('detail')
+
+        # 卖家补充说明不是闲鱼原始详情。将它合并在结构化本地详情内，保留已同步的
+        # 原始详情，供自动回复安全地引用。
+        if 'seller_notes' in fields:
+            seller_notes = fields.pop('seller_notes')
+            existing_item = db_manager.get_item_info(cookie_id, item_id)
+            existing_detail = fields.get('item_detail')
+            if existing_detail is None and existing_item:
+                existing_detail = existing_item.get('item_detail')
+            try:
+                detail_payload = json.loads(existing_detail) if isinstance(existing_detail, str) else existing_detail
+            except (TypeError, json.JSONDecodeError):
+                detail_payload = {'synced_detail': existing_detail} if existing_detail else {}
+            if not isinstance(detail_payload, dict):
+                detail_payload = {'synced_detail': detail_payload}
+            detail_payload['seller_notes'] = seller_notes or ''
+            fields['item_detail'] = json.dumps(detail_payload, ensure_ascii=False)
+
+        success = db_manager.update_item_local_fields(cookie_id, item_id, fields)
         if success:
-            return {"message": "商品详情更新成功"}
+            return {
+                "message": "本地商品资料已更新，不会修改闲鱼在售商品",
+                "local_only": True,
+            }
         else:
             raise HTTPException(status_code=400, detail="更新失败")
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新商品详情失败: {str(e)}")
+
+
+@app.post("/items/sync-detail")
+async def sync_item_detail(
+    request: ItemDetailSyncRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """强制同步一件已添加商品的详情到本地资料，不会修改闲鱼在线商品。"""
+    cookie_id = _ensure_cookie_access(request.cookie_id, current_user)
+    result = await _sync_single_item_detail(cookie_id, request.item_id)
+    status_code = 200 if result['success'] else 400
+    if not result['success']:
+        raise HTTPException(status_code=status_code, detail=result['error'])
+    return {
+        'message': '商品详情已同步到本地资料，不会修改闲鱼在线商品',
+        'local_only': True,
+        'result': result,
+    }
+
+
+@app.post("/items/sync-details")
+async def sync_item_details(
+    request: ItemDetailsSyncRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """批量强制同步已添加商品的详情，单次最多 10 件并限制并发。"""
+    cookie_id = _ensure_cookie_access(request.cookie_id, current_user)
+    item_ids = []
+    seen_item_ids = set()
+    for value in request.item_ids or []:
+        item_id = str(value or '').strip()
+        if item_id and item_id not in seen_item_ids:
+            seen_item_ids.add(item_id)
+            item_ids.append(item_id)
+
+    if not item_ids:
+        raise HTTPException(status_code=400, detail='请至少选择一件商品')
+    if len(item_ids) > _MAX_ITEM_DETAIL_SYNC_BATCH_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f'单次最多同步 {_MAX_ITEM_DETAIL_SYNC_BATCH_SIZE} 件商品，请分批操作',
+        )
+
+    # 该能力会为每件商品拉起浏览器，限制为两个并发以降低接口等待、内存占用和风控压力。
+    semaphore = asyncio.Semaphore(_MAX_ITEM_DETAIL_SYNC_CONCURRENCY)
+
+    async def run_one(item_id: str) -> Dict[str, Any]:
+        async with semaphore:
+            return await _sync_single_item_detail(cookie_id, item_id)
+
+    results = await asyncio.gather(*(run_one(item_id) for item_id in item_ids))
+    success_count = sum(1 for result in results if result['success'])
+    return {
+        'message': f'已完成 {len(results)} 件商品详情同步：成功 {success_count} 件，失败 {len(results) - success_count} 件',
+        'local_only': True,
+        'cookie_id': cookie_id,
+        'success_count': success_count,
+        'failed_count': len(results) - success_count,
+        'results': results,
+    }
 
 
 @app.put("/items/{cookie_id}/{item_id}/delivery-card")
@@ -11242,6 +11414,30 @@ def update_item_delivery_card(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新自动发货卡券失败: {str(e)}")
+
+
+@app.put("/items/{cookie_id}/{item_id}/auto-delivery")
+def update_item_auto_delivery(
+    cookie_id: str,
+    item_id: str,
+    update_data: ItemAutoDeliveryUpdate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """将本地商品加入或移出自动发货，不会修改闲鱼在线商品。"""
+    try:
+        cookie_id = _ensure_cookie_access(cookie_id, current_user)
+        if not db_manager.update_item_auto_delivery_enabled(cookie_id, item_id, update_data.enabled):
+            raise HTTPException(status_code=404, detail='商品不存在，无法更新自动发货状态')
+        return {
+            'message': '已启用自动发货' if update_data.enabled else '已移出自动发货',
+            'enabled': update_data.enabled,
+            'local_only': True,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新商品自动发货状态失败: {cookie_id}/{item_id} - {mask_sensitive_text(e)}")
+        raise HTTPException(status_code=500, detail='更新自动发货状态失败，请稍后重试')
 
 
 @app.delete("/items/{cookie_id}/{item_id}")
