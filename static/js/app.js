@@ -16925,7 +16925,7 @@ function createOrderRow(order) {
                 <span class="text-success fw-bold">${amountDisplay}</span>
             </td>
             <td>
-                <span class="badge ${statusClass}" title="${pendingConfirmTitle}">${escapeHtml(statusText)}</span>
+                <span class="badge order-status-badge ${statusClass}" title="${pendingConfirmTitle}">${escapeHtml(statusText)}</span>
                 ${pendingConfirmError ? `<div class="small text-warning text-truncate mt-1" style="max-width: 140px;" title="${pendingConfirmError}">${pendingConfirmError}</div>` : ''}
             </td>
             <td>
@@ -16961,20 +16961,20 @@ function createOrderRow(order) {
 function getOrderStatusClass(status) {
     const normalizedStatus = normalizeOrderStatus(status);
     const statusMap = {
-        'processing': 'bg-warning text-dark',
-        'pending_payment': 'bg-warning text-dark',
-        'pending_ship': 'bg-info text-white',
-        'partial_success': 'bg-primary-subtle text-primary-emphasis',
-        'partial_pending_finalize': 'bg-warning-subtle text-warning-emphasis',
-        'shipped': 'bg-primary text-white',
-        'completed': 'bg-success text-white',
-        'success': 'bg-success text-white',
-        'refunding': 'bg-warning text-dark',
-        'refund_cancelled': 'bg-info text-dark',
-        'cancelled': 'bg-secondary text-white',
-        'unknown': 'bg-secondary text-white'
+        'processing': 'order-status--warning',
+        'pending_payment': 'order-status--warning',
+        'pending_ship': 'order-status--info',
+        'partial_success': 'order-status--primary',
+        'partial_pending_finalize': 'order-status--warning',
+        'shipped': 'order-status--primary',
+        'completed': 'order-status--success',
+        'success': 'order-status--success',
+        'refunding': 'order-status--warning',
+        'refund_cancelled': 'order-status--info',
+        'cancelled': 'order-status--danger',
+        'unknown': 'order-status--neutral'
     }; 
-    return statusMap[normalizedStatus] || statusMap[status] || 'bg-secondary text-white';
+    return statusMap[normalizedStatus] || statusMap[status] || 'order-status--neutral';
 }
 
 // 获取订单状态文本
@@ -17748,7 +17748,7 @@ async function showOrderDetail(orderId) {
                                         <tr><td>买家ID</td><td>${safeBuyerId}</td></tr>
                                         <tr><td>买家昵称</td><td>${safeBuyerNick}</td></tr>
                                         <tr><td>Cookie账号</td><td>${safeCookieId}</td></tr>
-                                        <tr><td>订单状态</td><td><span class="badge ${getOrderStatusClass(order.order_status)}">${safeStatusText}</span></td></tr>
+                                        <tr><td>订单状态</td><td><span class="badge order-status-badge ${getOrderStatusClass(order.order_status)}">${safeStatusText}</span></td></tr>
                                         ${safePendingConfirmError ? `<tr><td>补确认状态</td><td><span class="badge bg-warning-subtle text-warning-emphasis">待补确认${pendingConfirmUnits ? ` × ${pendingConfirmUnits}` : ''}</span><div class="small text-warning mt-1">${safePendingConfirmError}</div></td></tr>` : ''}
                                     </table>
                                 </div>

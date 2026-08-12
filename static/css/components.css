@@ -666,6 +666,25 @@ textarea.form-control {
   color: #fff;
 }
 
+/* 订单管理：状态需要在浅色页面上保持足够对比度。 */
+.order-status-badge {
+  min-width: 72px;
+  padding: 5px 10px;
+  border: 1px solid currentColor;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  letter-spacing: .01em;
+}
+
+.order-status-badge.order-status--success { background: #dcfce7 !important; border-color: #15803d; color: #166534 !important; }
+.order-status-badge.order-status--primary { background: #dbeafe !important; border-color: #1d4ed8; color: #1e3a8a !important; }
+.order-status-badge.order-status--info { background: #cffafe !important; border-color: #0e7490; color: #155e75 !important; }
+.order-status-badge.order-status--warning { background: #fef3c7 !important; border-color: #b45309; color: #78350f !important; }
+.order-status-badge.order-status--danger { background: #fee2e2 !important; border-color: #b91c1c; color: #7f1d1d !important; }
+.order-status-badge.order-status--neutral { background: #e5e7eb !important; border-color: #4b5563; color: #1f2937 !important; }
+
 /* 状态点 + 文案的通用状态徽章 */
 .status-badge {
   display: inline-flex;
