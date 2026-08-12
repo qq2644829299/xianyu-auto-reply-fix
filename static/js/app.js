@@ -14060,6 +14060,10 @@ async function checkManualCookieImportStatus() {
 
             switch (data.status) {
                 case 'processing':
+                    const submitBtn = document.querySelector('#addForm button[type="submit"]');
+                    if (submitBtn) {
+                        submitBtn.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>${escapeHtml(data.message || '验证处理中')}`;
+                    }
                     break;
                 case 'verification_required':
                     showPasswordLoginQRCode(

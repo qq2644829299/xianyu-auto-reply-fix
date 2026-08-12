@@ -6077,14 +6077,7 @@ async def _execute_manual_cookie_import(
             'proxy_user': existing_cookie_info.get('proxy_user', ''),
             'proxy_pass': existing_cookie_info.get('proxy_pass', ''),
         }
-        slider_instance = XianyuSliderStealth(
-            user_id=account_id,
-            enable_learning=True,
-            headless=not show_browser,
-            initial_cookies=cookie_value,
-            proxy=proxy_config,
-        )
-        manual_cookie_import_sessions[session_id]['slider_instance'] = slider_instance
+        slider_instance = None
 
         def merge_cookie_dicts_for_import(incoming_cookie_dict: Optional[Dict[str, Any]], source_label: str) -> Dict[str, Any]:
             existing_cookie_dict = trans_cookies(cookie_value)
@@ -6229,7 +6222,20 @@ async def _execute_manual_cookie_import(
                 )
 
         def run_import():
+            nonlocal slider_instance
             try:
+                _set_manual_cookie_import_session_status(session_id, 'processing', phase='starting_browser')
+                # 构造函数会等待滑块并发槽位，最长可能阻塞 60 秒；必须只在后台
+                # 线程中执行，不能占住 FastAPI 事件循环导致 POST 一直转圈。
+                slider_instance = XianyuSliderStealth(
+                    user_id=account_id,
+                    enable_learning=True,
+                    headless=True,
+                    initial_cookies=cookie_value,
+                    proxy=proxy_config,
+                )
+                manual_cookie_import_sessions[session_id]['slider_instance'] = slider_instance
+                _set_manual_cookie_import_session_status(session_id, 'processing', phase='checking_cookie')
                 probe_result = probe_cookie_verification_from_cookie(cookie_value, proxy_config)
                 if probe_result.get('status') == 'cookie_valid':
                     merged_cookies_dict = merge_cookie_dicts_for_import(
@@ -6250,6 +6256,7 @@ async def _execute_manual_cookie_import(
                         f"未拿到最新 verification_url: {probe_result.get('payload') or probe_result}"
                     )
                 log_with_user('info', f"手动导入 Cookie 已解析 verification_url: {account_id}", current_user)
+                _set_manual_cookie_import_session_status(session_id, 'processing', phase='browser_verification')
 
                 strict_result = run_slider_with_fallback(
                     slider_instance,
@@ -6275,7 +6282,8 @@ async def _execute_manual_cookie_import(
             finally:
                 try:
                     from utils.xianyu_slider_stealth import concurrency_manager
-                    concurrency_manager.unregister_instance(account_id, slider_instance)
+                    if slider_instance is not None:
+                        concurrency_manager.unregister_instance(account_id, slider_instance)
                 except Exception:
                     pass
 
@@ -6310,11 +6318,31 @@ async def manual_cookie_import(
             if account_id not in user_cookies:
                 return {'success': False, 'message': '该账号ID已被其他用户使用'}
 
+        # 同一用户、同一闲鱼账号只允许一个导入验证流程。前端重复点击或请求
+        # 重试时复用原会话，避免多个 Playwright 实例争抢同账号滑块槽位。
+        now = time.time()
+        for existing_session_id, existing_session in list(manual_cookie_import_sessions.items()):
+            if existing_session.get('user_id') != user_id:
+                continue
+            if str(existing_session.get('account_id') or '').strip() != account_id:
+                continue
+            existing_status = str(existing_session.get('status') or '').strip().lower()
+            session_age = now - float(existing_session.get('timestamp') or now)
+            if existing_status in {'processing', 'verification_required'} and session_age < 900:
+                return {
+                    'success': True,
+                    'session_id': existing_session_id,
+                    'status': existing_status,
+                    'reused': True,
+                    'message': '该账号正在验证中，已继续使用原任务',
+                }
+
         session_id = secrets.token_urlsafe(16)
         manual_cookie_import_sessions[session_id] = {
             'account_id': account_id,
             'show_browser': show_browser,
             'status': 'processing',
+            'phase': 'queued',
             'verification_url': None,
             'screenshot_path': None,
             'verification_type': None,
@@ -6339,7 +6367,7 @@ async def manual_cookie_import(
             'success': True,
             'session_id': session_id,
             'status': 'processing',
-            'message': 'Cookie导入验证任务已启动，请等待...',
+            'message': 'Cookie导入验证任务已进入后台队列',
         }
     except Exception as exc:
         log_with_user('error', f"手动导入 Cookie 异常: {str(exc)}", current_user)
@@ -6402,7 +6430,13 @@ async def check_manual_cookie_import_status(
             }
         return {
             'status': 'processing',
-            'message': 'Cookie 导入验证处理中，请稍候...',
+            'phase': session.get('phase') or 'processing',
+            'message': {
+                'queued': '验证任务已排队',
+                'starting_browser': '正在启动安全验证环境',
+                'checking_cookie': '正在检查 Cookie 登录状态',
+                'browser_verification': '正在处理闲鱼安全验证',
+            }.get(session.get('phase'), 'Cookie 导入验证处理中，请稍候...'),
         }
     except Exception as exc:
         log_with_user('error', f"检查手动导入 Cookie 状态异常: {str(exc)}", current_user)
