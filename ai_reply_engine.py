@@ -15,6 +15,7 @@ import re
 from datetime import datetime
 import requests
 import threading
+import asyncio
 from typing import List, Dict, Optional
 from loguru import logger
 from db_manager import db_manager
@@ -558,6 +559,20 @@ class AIReplyEngine:
                 usage_reference = f'ai:{cookie_id}:{chat_id}:{message_created_at}'
                 if not db_manager.consume_ai_credit(account_owner_id, cookie_id, chat_id, usage_reference):
                     logger.warning(f'账号 {cookie_id} 额度扣减失败或已不足，放弃发送本次 AI 回复')
+                    now = time.time()
+                    quota_mail_times = getattr(self, '_quota_mail_times', {})
+                    if now - float(quota_mail_times.get(account_owner_id, 0) or 0) >= 6 * 3600:
+                        quota_mail_times[account_owner_id] = now
+                        self._quota_mail_times = quota_mail_times
+                        threading.Thread(
+                            target=lambda: asyncio.run(db_manager.send_platform_quota_email(
+                                account_owner_id,
+                                'insufficient',
+                                remaining_calls=db_manager.get_ai_credit_balance(account_owner_id),
+                            )),
+                            daemon=True,
+                            name=f'ai-quota-mail-{account_owner_id}',
+                        ).start()
                     return None
 
                 # 11. 保存AI回复到对话记录

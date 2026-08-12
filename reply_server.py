@@ -4144,10 +4144,27 @@ async def _sync_single_item_detail(cookie_id: str, item_id: str) -> Dict[str, An
                 result['error'] = '未获取到商品详情，请检查账号状态、商品状态或稍后重试'
                 return result
 
-            if not db_manager.update_item_detail(cookie_id, normalized_item_id, str(detail).strip()):
+            detail_text = str(detail).strip()
+            fields: Dict[str, Any] = {'item_detail': detail_text}
+            try:
+                structured = json.loads(detail_text)
+            except (TypeError, json.JSONDecodeError):
+                structured = None
+            if isinstance(structured, dict) and structured.get('source') == 'mtop.taobao.idle.pc.detail':
+                fields.update({
+                    'item_title': structured.get('title', ''),
+                    'item_description': structured.get('description', ''),
+                    'item_category': structured.get('category_id', ''),
+                    'item_price': structured.get('price', ''),
+                })
+            if not db_manager.update_item_local_fields(cookie_id, normalized_item_id, fields):
                 result['error'] = '详情已获取，但保存本地资料失败'
                 return result
-            result.update({'success': True, 'detail_length': len(str(detail).strip())})
+            result.update({
+                'success': True,
+                'detail_length': len(detail_text),
+                'image_count': len((structured or {}).get('images') or []) if isinstance(structured, dict) else 0,
+            })
             return result
         except HTTPException as exc:
             result['error'] = str(exc.detail)
@@ -11635,12 +11652,21 @@ def get_billing_summary(current_user: Dict[str, Any] = Depends(get_current_user)
 
 
 @app.post('/billing/redeem')
-def redeem_billing_code(payload: RedeemActivationCode, current_user: Dict[str, Any] = Depends(get_current_user)):
+def redeem_billing_code(payload: RedeemActivationCode, background_tasks: BackgroundTasks,
+                        current_user: Dict[str, Any] = Depends(get_current_user)):
     if not payload.code.strip():
         raise HTTPException(status_code=400, detail='请输入卡密')
     result = db_manager.redeem_activation_code(current_user['user_id'], payload.code)
     if not result['success']:
         raise HTTPException(status_code=400, detail=result['message'])
+    if result.get('product_type') == 'ai_credit':
+        background_tasks.add_task(
+            db_manager.send_platform_quota_email,
+            current_user['user_id'],
+            'credited',
+            calls=result.get('amount', 0),
+            remaining_calls=result.get('ai_balance', 0),
+        )
     return result
 
 

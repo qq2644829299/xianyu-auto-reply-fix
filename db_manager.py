@@ -4410,7 +4410,13 @@ Cookie数量: {cookie_count}
                     message = f'兑换成功，自动发货已授权至 {expires.strftime("%Y-%m-%d %H:%M:%S")}'
                 self._execute_sql(cursor, 'UPDATE activation_codes SET status=?,used_by=?,used_at=CURRENT_TIMESTAMP WHERE id=?', ('used', user_id, card_id))
                 self.conn.commit()
-                return {'success': True, 'message': message, 'ai_balance': self.get_ai_credit_balance(user_id)}
+                return {
+                    'success': True,
+                    'message': message,
+                    'ai_balance': self.get_ai_credit_balance(user_id),
+                    'product_type': product_type,
+                    'amount': int(amount or 0),
+                }
             except Exception as e:
                 logger.error(f'兑换卡密失败: {e}')
                 self.conn.rollback()
@@ -4926,6 +4932,101 @@ Cookie数量: {cookie_count}
             return True
         except Exception as e:
             logger.error(f'腾讯云 SES 发送验证码邮件失败: {e}')
+            return False
+
+    async def send_platform_account_alert(self, cookie_id: str, *, email_override: str = None) -> bool:
+        """用平台 SES 向账号所属用户发送登录/Cookie 异常提醒。"""
+        try:
+            user_id = self.get_cookie_owner_id(cookie_id) if cookie_id else None
+            user = self.get_user_by_id(user_id) if user_id else None
+            email = str(email_override or (user or {}).get('email') or '').strip()
+            username = str((user or {}).get('username') or '鱼智云用户').strip()
+            if not email:
+                logger.warning(f'账号 {cookie_id} 未绑定可用邮箱，无法发送平台异常提醒')
+                return False
+
+            from tencentcloud.common import credential
+            from tencentcloud.common.profile.client_profile import ClientProfile
+            from tencentcloud.common.profile.http_profile import HttpProfile
+            from tencentcloud.ses.v20201002 import ses_client, models
+
+            secret_id = os.environ['TENCENTCLOUD_SECRET_ID']
+            secret_key = os.environ['TENCENTCLOUD_SECRET_KEY']
+            sender = os.getenv('SES_FROM_EMAIL', '').strip()
+            region = os.getenv('TENCENTCLOUD_SES_REGION', 'ap-hongkong').strip()
+            template_id = int(os.getenv('SES_TEMPLATE_COOKIE_INVALID_ID', '211660'))
+            if not sender:
+                logger.error('腾讯云 SES 未配置 SES_FROM_EMAIL')
+                return False
+
+            http_profile = HttpProfile()
+            http_profile.endpoint = 'ses.tencentcloudapi.com'
+            client = ses_client.SesClient(
+                credential.Credential(secret_id, secret_key),
+                region,
+                ClientProfile(httpProfile=http_profile),
+            )
+            request = models.SendEmailRequest()
+            request.FromEmailAddress = sender
+            request.Destination = [email]
+            request.Subject = '鱼智云 - 闲鱼账号登录失效提醒'
+            request.Template = {
+                'TemplateID': template_id,
+                'TemplateData': json.dumps({
+                    'username': username,
+                    'account_name': str(cookie_id or '闲鱼账号'),
+                }, ensure_ascii=False),
+            }
+            response = client.SendEmail(request)
+            logger.info(f'平台账号异常邮件发送成功: account={cookie_id}, request_id={response.RequestId}')
+            return True
+        except Exception as e:
+            logger.error(f'平台账号异常邮件发送失败: account={cookie_id}, error={e}')
+            return False
+
+    async def send_platform_quota_email(self, user_id: int, event_type: str, *, calls: int = 0,
+                                        remaining_calls: int = 0) -> bool:
+        """发送 AI 额度到账或额度不足模板邮件。"""
+        try:
+            user = self.get_user_by_id(user_id) or {}
+            email = str(user.get('email') or '').strip()
+            username = str(user.get('username') or '鱼智云用户').strip()
+            if not email:
+                return False
+            template_env = {
+                'credited': ('SES_TEMPLATE_QUOTA_CREDITED_ID', '211658'),
+                'insufficient': ('SES_TEMPLATE_QUOTA_INSUFFICIENT_ID', '211659'),
+            }
+            if event_type not in template_env:
+                return False
+            env_name, default_id = template_env[event_type]
+            from tencentcloud.common import credential
+            from tencentcloud.common.profile.client_profile import ClientProfile
+            from tencentcloud.common.profile.http_profile import HttpProfile
+            from tencentcloud.ses.v20201002 import ses_client, models
+            http_profile = HttpProfile()
+            http_profile.endpoint = 'ses.tencentcloudapi.com'
+            client = ses_client.SesClient(
+                credential.Credential(os.environ['TENCENTCLOUD_SECRET_ID'], os.environ['TENCENTCLOUD_SECRET_KEY']),
+                os.getenv('TENCENTCLOUD_SES_REGION', 'ap-hongkong'),
+                ClientProfile(httpProfile=http_profile),
+            )
+            request = models.SendEmailRequest()
+            request.FromEmailAddress = os.environ['SES_FROM_EMAIL']
+            request.Destination = [email]
+            request.Subject = '鱼智云 - AI 回复额度通知'
+            template_data = {'username': username, 'remaining_calls': str(max(0, int(remaining_calls)))}
+            if event_type == 'credited':
+                template_data['calls'] = str(max(0, int(calls)))
+            request.Template = {
+                'TemplateID': int(os.getenv(env_name, default_id)),
+                'TemplateData': json.dumps(template_data, ensure_ascii=False),
+            }
+            response = client.SendEmail(request)
+            logger.info(f'AI额度邮件发送成功: user_id={user_id}, event={event_type}, request_id={response.RequestId}')
+            return True
+        except Exception as e:
+            logger.error(f'AI额度邮件发送失败: user_id={user_id}, event={event_type}, error={e}')
             return False
 
     async def _send_email_via_smtp(self, email: str, subject: str, text_content: str,

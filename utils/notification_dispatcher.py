@@ -25,6 +25,7 @@ SUPPORTED_NOTIFICATION_TEMPLATE_TYPES = (
     'face_verify',
     'password_login_success',
     'cookie_refresh_success',
+    'account_paused',
 )
 
 
@@ -548,17 +549,27 @@ async def dispatch_notifications(notifications: Iterable[Dict[str, Any]], messag
 async def dispatch_account_notifications(account_id: str, message: str, *, title: str = '闲鱼管理系统通知', notification_type: str = 'info', attachment_path: Optional[str] = None) -> bool:
     from db_manager import db_manager
 
+    # 平台级账号异常邮件不依赖租户另行配置 SMTP/通知渠道。
+    platform_sent = False
+    benign_types = {'message', 'delivery', 'slider_success', 'slider_recovered_success',
+                    'password_login_success', 'cookie_refresh_success', 'info'}
+    if notification_type not in benign_types:
+        try:
+            platform_sent = await db_manager.send_platform_account_alert(account_id)
+        except Exception as exc:
+            logger.error(f"【{account_id}】平台异常邮件发送失败: {_safe_str(exc)}")
+
     try:
         notifications = db_manager.get_account_notifications(account_id)
     except Exception as exc:
         logger.warning(f"【{account_id}】获取通知配置失败: {_safe_str(exc)}")
-        return False
+        return platform_sent
 
     if not notifications:
-        logger.warning(f"【{account_id}】未配置消息通知，跳过发送")
-        return False
+        logger.info(f"【{account_id}】未配置附加通知渠道，平台异常邮件状态: {platform_sent}")
+        return platform_sent
 
-    return await dispatch_notifications(
+    custom_sent = await dispatch_notifications(
         notifications,
         message,
         title=title,
@@ -566,6 +577,7 @@ async def dispatch_account_notifications(account_id: str, message: str, *, title
         attachment_path=attachment_path,
         account_id=account_id,
     )
+    return platform_sent or custom_sent
 
 
 def dispatch_account_notifications_sync(account_id: str, message: str, *, title: str = '闲鱼管理系统通知', notification_type: str = 'info', attachment_path: Optional[str] = None) -> bool:

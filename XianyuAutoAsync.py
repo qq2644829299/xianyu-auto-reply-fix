@@ -9241,12 +9241,22 @@ class XianyuLive:
             logger.error(f"保存商品信息到数据库异常: {self._safe_str(e)}")
 
     async def save_item_detail_only(self, item_id, item_detail):
-        """仅保存商品详情（不影响标题等基本信息）"""
+        """保存商品详情，并将结构化详情中的常用字段回填到列表字段。"""
         try:
             from db_manager import db_manager
-
-            # 使用专门的详情更新方法
-            success = db_manager.update_item_detail(self.cookie_id, item_id, item_detail)
+            fields = {'item_detail': item_detail}
+            try:
+                detail_data = json.loads(item_detail) if isinstance(item_detail, str) else item_detail
+            except (TypeError, json.JSONDecodeError):
+                detail_data = None
+            if isinstance(detail_data, dict) and detail_data.get('source') == 'mtop.taobao.idle.pc.detail':
+                fields.update({
+                    'item_title': detail_data.get('title', ''),
+                    'item_description': detail_data.get('description', ''),
+                    'item_category': detail_data.get('category_id', ''),
+                    'item_price': detail_data.get('price', ''),
+                })
+            success = db_manager.update_item_local_fields(self.cookie_id, item_id, fields)
 
             if success:
                 logger.info(f"商品详情已更新: {item_id}")
@@ -9260,7 +9270,7 @@ class XianyuLive:
             return False
 
     async def fetch_item_detail_from_api(self, item_id: str, force_refresh: bool = False) -> str:
-        """获取商品详情（使用浏览器获取，支持24小时缓存）
+        """获取商品详情。优先正式详情 API，浏览器文本仅作为兜底。
 
         Args:
             item_id: 商品ID
@@ -9299,13 +9309,65 @@ class XianyuLive:
             else:
                 logger.info(f"强制刷新商品详情，跳过缓存: {item_id}")
 
-            # 2. 尝试使用浏览器获取商品详情
+            # 2. 正式详情 API 返回标题、描述、图片、价格、库存及规格。
+            api_response = await self.get_item_info(item_id)
+            api_data = (api_response or {}).get('data') if isinstance(api_response, dict) else None
+            item_do = (api_data or {}).get('itemDO') if isinstance(api_data, dict) else None
+            if isinstance(item_do, dict) and item_do:
+                image_infos = item_do.get('imageInfos') or []
+                images = []
+                for image in image_infos if isinstance(image_infos, list) else []:
+                    if isinstance(image, str):
+                        url = image
+                    elif isinstance(image, dict):
+                        url = image.get('url') or image.get('picUrl') or image.get('imageUrl') or image.get('image')
+                    else:
+                        url = ''
+                    if url:
+                        images.append(url if str(url).startswith(('http://', 'https://')) else f"https:{url}")
+                price = (item_do.get('defaultPrice') or item_do.get('soldPrice')
+                         or item_do.get('minPrice') or item_do.get('maxPrice') or '')
+                structured_detail = {
+                    'source': 'mtop.taobao.idle.pc.detail',
+                    'item_id': str(item_id),
+                    'title': item_do.get('title') or '',
+                    'description': item_do.get('desc') or '',
+                    'price': price,
+                    'min_price': item_do.get('minPrice'),
+                    'max_price': item_do.get('maxPrice'),
+                    'sold_price': item_do.get('soldPrice'),
+                    'quantity': item_do.get('quantity'),
+                    'category_id': item_do.get('categoryId') or '',
+                    'item_status': item_do.get('itemStatus'),
+                    'transport_fee': item_do.get('transportFee'),
+                    'images': images,
+                    'image_infos': image_infos,
+                    'sku_list': item_do.get('skuList') or [],
+                    'idle_item_sku_list': item_do.get('idleItemSkuList') or [],
+                    'seller': {
+                        'seller_id': ((api_data or {}).get('sellerDO') or {}).get('sellerId'),
+                        'nickname': ((api_data or {}).get('sellerDO') or {}).get('nick'),
+                    },
+                    'synced_at': datetime.now().isoformat(timespec='seconds'),
+                }
+                detail_json = json.dumps(structured_detail, ensure_ascii=False)
+                await self._add_to_item_cache(item_id, detail_json)
+                logger.info(f"成功通过详情API获取结构化商品详情: {item_id}, 图片 {len(images)} 张")
+                return detail_json
+
+            # 3. 详情 API 失败时才使用浏览器抓取描述文本。
             detail_from_browser = await self._fetch_item_detail_from_browser(item_id)
             if detail_from_browser:
+                fallback_detail = json.dumps({
+                    'source': 'browser_fallback',
+                    'item_id': str(item_id),
+                    'description': detail_from_browser,
+                    'synced_at': datetime.now().isoformat(timespec='seconds'),
+                }, ensure_ascii=False)
                 # 保存到缓存（带大小限制）
-                await self._add_to_item_cache(item_id, detail_from_browser)
+                await self._add_to_item_cache(item_id, fallback_detail)
                 logger.info(f"成功通过浏览器获取商品详情: {item_id}, 长度: {len(detail_from_browser)}")
-                return detail_from_browser
+                return fallback_detail
 
             # 浏览器获取失败
             logger.warning(f"浏览器获取商品详情失败: {item_id}")
@@ -9768,7 +9830,9 @@ class XianyuLive:
                 if await self._apply_response_cookie_updates(response.headers, "item_detail"):
                     logger.warning("已更新Cookie到数据库")
 
-                logger.warning(f"商品信息获取成功: {res_json}")
+                logger.debug(
+                    f"商品信息API响应: item_id={item_id}, ret={res_json.get('ret') if isinstance(res_json, dict) else 'invalid'}"
+                )
                 # 检查返回状态
                 if isinstance(res_json, dict):
                     ret_value = res_json.get('ret', [])
@@ -10950,9 +11014,11 @@ class XianyuLive:
             verification_type: 验证类型（可选，优先使用调用方已识别的真实类型）
         """
         try:
-            # 检查是否是正常的令牌过期，这种情况不需要发送通知
-            if notification_type != "token_scheduled_refresh_failed" and self._is_normal_token_expiry(error_message):
-                logger.warning(f"检测到正常的令牌过期，跳过通知: {error_message}")
+            # 最终进入通知链路的 Cookie/Session 过期必须提醒用户。仅定时刷新仍会
+            # 自动重试的中间态保持静默，避免同一瞬时故障反复发信。
+            if ('Token定时刷新失败，将自动重试' in str(error_message)
+                    and notification_type != 'token_scheduled_refresh_failed'):
+                logger.info(f"Token 定时刷新仍在重试，暂不通知: {error_message}")
                 return
 
             notification_key = f"token:{notification_type}"

@@ -943,29 +943,12 @@
                 </select>
               </div>
 
-              <div class="col-md-6">
-                <div class="d-flex justify-content-end align-items-end gap-2">
-                  <!-- 页码输入 -->
-                  <div class="d-flex align-items-center gap-2">
-                    <label for="pageNumber" class="form-label mb-0 text-nowrap">页码:</label>
-                    <input type="number" class="form-control" id="pageNumber" placeholder="页码" min="1" value="1" style="width: 80px;">
-                  </div>
-                  <div class="d-flex gap-2">
-                    <button class="btn btn-success" onclick="getAllItemsFromAccount()">
-                      <i class="bi bi-download me-1"></i>同步指定页
-                    </button>
-                    <button class="btn btn-warning" onclick="getAllItemsFromAccountAll()">
-                      <i class="bi bi-collection me-1"></i>同步所有页
-                    </button>
-                    <button class="btn btn-primary" onclick="refreshItems()">
-                      <i class="bi bi-arrow-clockwise me-1"></i>刷新列表
-                    </button>
-                  </div>
-                </div>
+              <div class="col-md-6 text-md-end">
+                <span class="text-muted small">勾选下方商品后，可批量更新详情</span>
               </div>
             </div>
 
-            <p class="text-muted small mb-0">“同步指定页 / 同步所有页”会从闲鱼拉取最新商品详情；“刷新列表”只重载本地数据库内容。</p>
+            <p class="text-muted small mb-0">“从闲鱼同步”只更新已勾选商品的标题、描述、图片和价格，不会修改闲鱼上的商品。</p>
 
           </div>
         </div>
@@ -978,9 +961,14 @@
                      placeholder="搜索商品标题或详情..." style="width: 300px;">
               <h5 class="mb-0">商品列表</h5>
             </div>
-            <button class="btn btn-sm btn-outline-danger" onclick="batchDeleteItems()" id="batchDeleteBtn" disabled>
-              <i class="bi bi-trash"></i> 批量删除
-            </button>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-primary" onclick="syncSelectedItemsFromXianyu(this)" id="batchSyncItemsBtn" disabled>
+                <i class="bi bi-cloud-download me-1"></i>从闲鱼同步
+              </button>
+              <button class="btn btn-sm btn-outline-danger" onclick="batchDeleteItems()" id="batchDeleteBtn" disabled>
+                <i class="bi bi-trash"></i> 批量删除
+              </button>
+            </div>
           </div>
           <div class="card-body">
             <!-- 搜索统计信息 -->
@@ -1709,9 +1697,6 @@
               <div class="text-muted small">只有绑定了可用卡券的商品才会进入自动发货流程</div>
             </div>
             <div class="d-flex flex-wrap gap-2">
-              <button class="btn btn-outline-primary btn-sm" type="button" onclick="syncSelectedAutoDeliveryProducts(this)">
-                <i class="bi bi-arrow-repeat me-1"></i>同步商品详情
-              </button>
               <button class="btn btn-primary btn-sm" type="button" onclick="openAddAutoDeliveryProductModal()">
                 <i class="bi bi-plus-lg me-1"></i>添加商品
               </button>
@@ -5060,7 +5045,7 @@
 
   <!-- JS依赖 -->
   <script src="/static/lib/bootstrap/bootstrap.bundle.min.js"></script>
-  <script src="/static/js/app.js?v=1.3.4"></script>
+  <script src="/static/js/app.js?v=1.3.5"></script>
 
   <!-- 默认回复管理模态框 -->
   <div class="modal fade" id="defaultReplyModal" tabindex="-1" aria-labelledby="defaultReplyModalLabel" aria-hidden="true">
@@ -5207,6 +5192,7 @@
             </div>
 
             <div class="row g-3">
+              <div class="col-12" id="editItemImagesSection" style="display:none"><label class="form-label">商品图片</label><div class="d-flex flex-wrap gap-2" id="editItemImages"></div><div class="form-text" id="editItemImageCount"></div></div>
               <div class="col-12"><label for="editItemTitle" class="form-label">商品标题</label><input class="form-control" id="editItemTitle" maxlength="120" placeholder="输入商品标题"></div>
               <div class="col-md-7"><label for="editItemCategory" class="form-label">商品类目</label><input class="form-control" id="editItemCategory" maxlength="120" placeholder="例如：数码配件、图书、服饰"></div>
               <div class="col-md-5"><label for="editItemPrice" class="form-label">商品价格</label><div class="input-group"><span class="input-group-text">¥</span><input class="form-control" id="editItemPrice" maxlength="80" placeholder="例如：99.00"></div></div>
@@ -5230,13 +5216,22 @@
     <div class="modal-dialog modal-lg"><div class="modal-content">
       <div class="modal-header"><h5 class="modal-title"><i class="bi bi-box-seam me-2"></i>添加自动发货商品</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body">
-        <p class="text-muted">从已同步商品中选择一件，再为它配置卡券。若列表中没有目标商品，请先到商品管理同步。</p>
-        <div class="row g-3">
-          <div class="col-md-5"><label class="form-label" for="addAutoDeliveryAccount">闲鱼账号</label><select class="form-select" id="addAutoDeliveryAccount" onchange="populateAutoDeliveryProductChoices()"><option value="">请选择账号</option></select></div>
-          <div class="col-md-7"><label class="form-label" for="addAutoDeliveryProduct">商品</label><select class="form-select" id="addAutoDeliveryProduct"><option value="">请选择商品</option></select></div>
+        <p class="text-muted">搜索并勾选商品，可一次添加多件。添加后再逐件配置自动发货卡券。</p>
+        <div class="row g-2 mb-3">
+          <div class="col-md-4"><label class="form-label" for="addAutoDeliveryAccount">闲鱼账号</label><select class="form-select" id="addAutoDeliveryAccount" onchange="renderAutoDeliveryProductPicker()"><option value="">全部账号</option></select></div>
+          <div class="col-md-8"><label class="form-label" for="addAutoDeliveryProductSearch">搜索商品</label><input class="form-control" id="addAutoDeliveryProductSearch" placeholder="输入商品名称或商品 ID" oninput="renderAutoDeliveryProductPicker()"></div>
         </div>
+        <div class="border rounded overflow-hidden">
+          <div class="table-responsive" style="max-height: 430px; overflow-y: auto;">
+            <table class="table table-hover align-middle mb-0">
+              <thead class="table-light sticky-top"><tr><th style="width:44px"><input class="form-check-input" type="checkbox" id="selectAllAutoDeliveryPicker" onchange="toggleAllAutoDeliveryPicker(this.checked)"></th><th style="width:76px">主图</th><th>商品</th><th style="width:130px">价格</th></tr></thead>
+              <tbody id="addAutoDeliveryProductTable"><tr><td colspan="4" class="text-center text-muted py-4">正在加载商品...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="small text-muted mt-2" id="addAutoDeliveryProductSummary">已选择 0 件商品</div>
       </div>
-      <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">取消</button><button class="btn btn-primary" onclick="saveAutoDeliveryProduct()"><i class="bi bi-check-lg me-1"></i>添加商品</button></div>
+      <div class="modal-footer"><button class="btn btn-light" data-bs-dismiss="modal">取消</button><button class="btn btn-primary" onclick="saveAutoDeliveryProducts(this)"><i class="bi bi-check-lg me-1"></i>添加所选商品</button></div>
     </div></div>
   </div>
 
