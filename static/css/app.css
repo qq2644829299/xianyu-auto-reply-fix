@@ -9,3 +9,47 @@
 @import url('components.css');
 @import url('about.css');
 @import url('admin.css');
+/* Contact support modal */
+.support-modal-content {
+  overflow: hidden;
+  border: 1px solid rgba(7, 44, 44, .16);
+  border-radius: 18px;
+  box-shadow: 0 24px 72px rgba(15, 23, 42, .2);
+}
+
+.support-modal-eyebrow {
+  margin-bottom: 5px;
+  color: #0f766e;
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.support-modal-qr {
+  display: block;
+  width: min(100%, 276px);
+  height: auto;
+  margin: 0 auto 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+}
+
+.support-modal-id {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: #f0fdfa;
+  color: #64748b;
+  font-size: .82rem;
+}
+
+.support-modal-id strong {
+  color: #0f3d3a;
+  font-size: 1rem;
+  letter-spacing: .04em;
+}

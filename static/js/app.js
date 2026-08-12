@@ -1033,9 +1033,9 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
     if (vncAvailable) {
         detail = tokenError || '当前存在可接管的浏览器流程，请通过远程桌面完成滑块、扫码、人脸或其他风控验证。';
     } else if (tokenStatus === 'password_login_backoff_wait') {
-        detail = tokenError || '当前只是失败退避等待，浏览器流程通常已结束。请重新发起“刷新 Cookie”并勾选“显示浏览器”，或等待退避结束。';
+        detail = tokenError || '当前处于失败退避等待。请重新发起账号恢复，或等待退避结束后再试。';
     } else if (tokenStatus === 'captcha_max_retries_exceeded' || tokenStatus === 'token_refresh_failed' || tokenStatus === 'token_refresh_exception') {
-        detail = tokenError || '当前没有可接管的浏览器流程。请重新发起“刷新 Cookie”并勾选“显示浏览器”，让系统打开新的可接管页面。';
+        detail = tokenError || '当前没有可接管的验证流程。请重新发起账号恢复或扫码登录。';
     }
 
     return {

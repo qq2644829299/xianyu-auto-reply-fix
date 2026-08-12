@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/static/lib/bootstrap/bootstrap.min.css">
   <link rel="stylesheet" href="/static/lib/bootstrap-icons/bootstrap-icons.css">
 
-  <link rel="stylesheet" href="/static/css/app.css?v=1.3.1">
+  <link rel="stylesheet" href="/static/css/app.css?v=1.3.3">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -164,6 +164,12 @@
       <!-- 底部分隔符 -->
       <div class="nav-divider mt-3 mb-2">
         <small class="text-white-50">系统操作</small>
+      </div>
+      <div class="nav-item">
+        <button type="button" class="nav-link" data-bs-toggle="modal" data-bs-target="#wechatSupportModal">
+          <i class="bi bi-wechat"></i>
+          <span>联系支持</span>
+        </button>
       </div>
       <div class="nav-item">
         <button type="button" class="nav-link" onclick="logout()">
@@ -5033,9 +5039,28 @@
   <!-- 提示消息容器 -->
   <div class="toast-container"></div>
 
+  <div class="modal fade" id="wechatSupportModal" tabindex="-1" aria-labelledby="wechatSupportModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+      <div class="modal-content support-modal-content">
+        <div class="modal-header border-0 pb-0">
+          <div>
+            <div class="support-modal-eyebrow">鱼智云支持</div>
+            <h5 class="modal-title" id="wechatSupportModalTitle">有疑问，可以联系我</h5>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+        </div>
+        <div class="modal-body text-center pt-3">
+          <img class="support-modal-qr" src="/static/wechat-error-413.jpg" alt="个人微信 Error_413 二维码" width="888" height="1105" loading="lazy">
+          <div class="support-modal-id"><span>个人微信</span><strong>Error_413</strong></div>
+          <p class="text-muted small mb-0">微信扫码添加，建议备注“鱼智云”</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- JS依赖 -->
   <script src="/static/lib/bootstrap/bootstrap.bundle.min.js"></script>
-  <script src="/static/js/app.js?v=1.3.2"></script>
+  <script src="/static/js/app.js?v=1.3.3"></script>
 
   <!-- 默认回复管理模态框 -->
   <div class="modal fade" id="defaultReplyModal" tabindex="-1" aria-labelledby="defaultReplyModalLabel" aria-hidden="true">
@@ -5795,7 +5820,6 @@
               <ul class="mb-0 mt-2">
                 <li>Cookie是必填项，其他字段可选</li>
                 <li>配置用户名和密码后，系统可在需要时通过账密流程刷新 Cookie</li>
-                <li>开启“显示浏览器”后，该账号的账密相关流程会优先使用有头模式</li>
                 <li><strong>代理配置：</strong>为每个账号设置独立代理，可实现IP隔离，降低账号关联风险</li>
               </ul>
             </div>

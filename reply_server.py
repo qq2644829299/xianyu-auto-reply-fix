@@ -4751,7 +4751,7 @@ class CookieAccountInfo(BaseModel):
 
 @app.post("/cookie/{cid}/account-info")
 def update_cookie_account_info(cid: str, info: CookieAccountInfo, current_user: Dict[str, Any] = Depends(get_current_user)):
-    """更新账号信息（Cookie、用户名、密码、显示浏览器设置）"""
+    """更新账号信息；浏览器展示能力已下线，兼容字段始终写为关闭。"""
     if cookie_manager.manager is None:
         raise HTTPException(status_code=500, detail='CookieManager 未就绪')
     try:
@@ -4773,7 +4773,7 @@ def update_cookie_account_info(cid: str, info: CookieAccountInfo, current_user: 
             cookie_value=info.value,
             username=info.username,
             password=info.password,
-            show_browser=info.show_browser
+            show_browser=False
         )
         
         if not success:
@@ -4796,7 +4796,7 @@ def update_cookie_account_info(cid: str, info: CookieAccountInfo, current_user: 
 
 @app.get("/cookie/{cid}/details")
 def get_cookie_account_details(cid: str, include_secrets: bool = False, current_user: Dict[str, Any] = Depends(get_current_user)):
-    """获取账号详细信息（包括用户名、密码、显示浏览器设置）"""
+    """获取账号详细信息。"""
     try:
         cid = _ensure_cookie_access(cid, current_user)
 
@@ -4805,6 +4805,9 @@ def get_cookie_account_details(cid: str, include_secrets: bool = False, current_
         
         if not details:
             raise HTTPException(status_code=404, detail="账号不存在")
+
+        # 兼容旧客户端保留字段，但不再允许租户开启浏览器窗口。
+        details['show_browser'] = False
 
         runtime_status = _build_live_runtime_status(cid)
 
@@ -6295,7 +6298,7 @@ async def manual_cookie_import(
     try:
         account_id = str(request.account_id or '').strip()
         cookie_value = str(request.cookie or '').replace('\ufeff', '').strip()
-        show_browser = bool(request.show_browser)
+        show_browser = False
         user_id = current_user['user_id']
 
         if not account_id or not cookie_value:
@@ -6416,9 +6419,8 @@ async def password_login(
         account_id = request.get('account_id')
         account = request.get('account')
         password = request.get('password')
-        # 检查前端是否明确指定了 show_browser 参数
-        show_browser_specified = 'show_browser' in request
-        show_browser = request.get('show_browser', False)
+        # 浏览器窗口功能已从租户侧下线；忽略旧客户端传入值与历史账号配置。
+        show_browser = False
         refresh_mode = request.get('refresh_mode', False)  # 刷新模式：从数据库读取账密
         risk_log_id = None
 
@@ -6441,11 +6443,7 @@ async def password_login(
             if not account or not password:
                 return {'success': False, 'message': '该账号未配置用户名和密码，无法刷新Cookie'}
 
-            # 获取 show_browser 设置（只有当前端没有明确指定时，才使用数据库配置）
-            if not show_browser_specified:
-                show_browser = cookie_info.get('show_browser', False)
-
-            log_with_user('info', f"刷新Cookie模式: {account_id}, 用户名: {account}, show_browser: {show_browser}", current_user)
+            log_with_user('info', f"刷新Cookie模式: {account_id}, 用户名: {account}, headless: True", current_user)
 
             if XianyuLive.is_manual_refresh_active(account_id):
                 return {'success': False, 'message': f'账号 {account_id} 正在执行手动刷新，请稍候再试'}
