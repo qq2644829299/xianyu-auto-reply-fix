@@ -96,22 +96,23 @@ h1, h2, .page-title { font-family: Oswald, Ubuntu, "PingFang SC", sans-serif; le
 .user-stat-card-cookies .user-stat-icon { background: #fff2e8; color: #a93f00; }.user-stat-card-cards .user-stat-icon { background: #eaf7ee; color: #13743b; }.user-stat-card-status .user-stat-icon { background: #e3efed; color: var(--od-ink); }
 .user-stat-live-dot { display: inline-block; width: 7px; height: 7px; margin: 0 5px 1px 0; border-radius: 50%; background: var(--od-success); }
 
-button, .btn, .button, .el-button, input[type="button"], input[type="submit"] { border-radius: 7px !important; transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease !important; }
-.btn { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-weight: 650 !important; }
-.btn-sm { min-height: 30px; }.btn-lg { min-height: 42px; }
-.btn-outline-primary { color: var(--od-ink) !important; border-color: var(--od-ink) !important; background: transparent !important; }
-.btn-outline-primary:hover { background: var(--od-ink) !important; color: #fff !important; }
-.btn-outline-secondary { color: #4f5b59 !important; border-color: #aeb6b1 !important; background: #fff !important; }
-.btn-outline-secondary:hover { background: #f4f2e9 !important; border-color: #596260 !important; color: var(--od-text) !important; }
-.btn-outline-success { color: #13743b !important; border-color: #86c89b !important; }.btn-outline-success:hover { background: var(--od-success) !important; border-color: var(--od-success) !important; color: #fff !important; }
-.btn-outline-warning { color: #a93f00 !important; border-color: #f0aa78 !important; }.btn-outline-warning:hover { background: var(--od-accent) !important; border-color: var(--od-accent) !important; color: #fff !important; }
-.btn-outline-danger { color: #b42318 !important; border-color: #eea8a2 !important; }.btn-outline-danger:hover { background: var(--od-danger) !important; border-color: var(--od-danger) !important; color: #fff !important; }
+/* Element-style controls: compact, predictable borders and one primary action. */
+button, .btn, .button, .el-button, input[type="button"], input[type="submit"] { border-radius: 4px !important; transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease !important; }
+.btn { min-height: 32px; padding: 8px 15px !important; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px !important; font-weight: 500 !important; line-height: 1 !important; box-shadow: none !important; }
+.btn-sm { min-height: 24px; padding: 5px 9px !important; font-size: 12px !important; }.btn-lg { min-height: 40px; }
+.btn-outline-primary { color: #409eff !important; border-color: #a0cfff !important; background: #ecf5ff !important; }
+.btn-outline-primary:hover { background: #409eff !important; border-color: #409eff !important; color: #fff !important; }
+.btn-outline-secondary { color: #606266 !important; border-color: #dcdfe6 !important; background: #fff !important; }
+.btn-outline-secondary:hover { color: #409eff !important; border-color: #c6e2ff !important; background: #ecf5ff !important; }
+.btn-outline-success { color: #67c23a !important; border-color: #b3e19d !important; background: #f0f9eb !important; }.btn-outline-success:hover { background: #67c23a !important; border-color: #67c23a !important; color: #fff !important; }
+.btn-outline-warning { color: #e6a23c !important; border-color: #f3d19e !important; background: #fdf6ec !important; }.btn-outline-warning:hover { background: #e6a23c !important; border-color: #e6a23c !important; color: #fff !important; }
+.btn-outline-danger { color: #f56c6c !important; border-color: #fab6b6 !important; background: #fef0f0 !important; }.btn-outline-danger:hover { background: #f56c6c !important; border-color: #f56c6c !important; color: #fff !important; }
 .btn:disabled, .btn.disabled, button:disabled { opacity: .48 !important; cursor: not-allowed; box-shadow: none !important; }
 .btn-primary, .button-primary, .el-button--primary, button.primary, .primary-btn {
-  background: var(--od-ink) !important; border-color: var(--od-ink) !important; color: #fff !important;
+  background: #409eff !important; border-color: #409eff !important; color: #fff !important;
 }
 .btn-primary:hover, .button-primary:hover, .el-button--primary:hover, button.primary:hover, .primary-btn:hover {
-  background: var(--od-ink-soft) !important; border-color: var(--od-ink-soft) !important;
+  background: #66b1ff !important; border-color: #66b1ff !important;
 }
 .btn-warning, .button-warning, .el-button--warning { background: var(--od-accent) !important; border-color: var(--od-accent) !important; color: #fff !important; }
 .btn-success, .button-success, .el-button--success { background: var(--od-success) !important; border-color: var(--od-success) !important; }
@@ -124,40 +125,40 @@ input::placeholder, textarea::placeholder { color: #8a8f97 !important; }
 .form-label { color: #34403e !important; font-size: 12px !important; font-weight: 700 !important; }
 .form-text { color: var(--od-muted) !important; }
 .form-check-input:checked { background-color: var(--od-ink) !important; border-color: var(--od-ink) !important; }
-/* Switches use position and an explicit label; state is never communicated by color. */
+/* Element-style switches: clear thumb position plus optional inline on/off text. */
 .form-switch {
   display: inline-flex !important;
   align-items: center;
-  gap: 8px;
-  min-height: 32px;
+  gap: 6px;
+  min-height: 24px;
 }
 .form-switch .form-check-input {
-  width: 48px !important;
-  height: 26px !important;
+  width: 40px !important;
+  height: 20px !important;
   margin: 0 !important;
   cursor: pointer;
-  border: 2px solid #1c2423 !important;
+  border: 1px solid #dcdfe6 !important;
   border-radius: 999px !important;
-  background-color: #f8f8f6 !important;
-  background-position: 4px center !important;
+  background-color: #dcdfe6 !important;
+  background-position: 2px center !important;
   box-shadow: none !important;
 }
 .form-switch .form-check-input:checked {
-  border-color: #1c2423 !important;
-  background-color: #1c2423 !important;
-  background-position: right 4px center !important;
+  border-color: #409eff !important;
+  background-color: #409eff !important;
+  background-position: right 2px center !important;
 }
 .form-switch::after {
   content: '已关闭';
   display: inline-flex;
   align-items: center;
-  min-width: 48px;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid #b8bfbd;
-  border-radius: 999px;
-  color: #1c2423;
-  background: #fff;
+  min-width: 42px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #909399;
+  background: transparent;
   font-size: 12px;
   font-weight: 800;
   line-height: 1;
@@ -165,9 +166,8 @@ input::placeholder, textarea::placeholder { color: #8a8f97 !important; }
 }
 .form-switch:has(.form-check-input:checked)::after {
   content: '已开启';
-  border-color: #1c2423;
-  color: #fff;
-  background: #1c2423;
+  color: #409eff;
+  background: transparent;
 }
 .form-switch .form-check-input:focus-visible {
   outline: 3px solid rgba(255,95,3,.55) !important;

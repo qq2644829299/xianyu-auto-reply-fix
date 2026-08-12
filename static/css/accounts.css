@@ -4,8 +4,8 @@
 .status-toggle {
   position: relative;
   display: inline-block;
-  width: 62px;
-  height: 30px;
+  width: 46px;
+  height: 24px;
 }
 
 .status-toggle input {
@@ -21,19 +21,19 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: #fff;
-  border: 2px solid #1c2423;
-  transition: .18s ease;
-  border-radius: 24px;
+  background-color: #dcdfe6;
+  border: 1px solid #dcdfe6;
+  transition: .22s ease;
+  border-radius: 12px;
 }
 
 .status-slider:after {
   content: "关";
   position: absolute;
-  right: 8px;
+  right: 7px;
   top: 50%;
   transform: translateY(-50%);
-  color: #1c2423;
+  color: #fff;
   font-size: 12px;
   font-weight: 800;
   line-height: 1;
@@ -42,29 +42,28 @@
 .status-slider:before {
   position: absolute;
   content: "";
-  height: 22px;
-  width: 22px;
-  left: 2px;
-  bottom: 2px;
-  background-color: #1c2423;
-  transition: .4s;
+  height: 20px;
+  width: 20px;
+  left: 1px;
+  bottom: 1px;
+  background-color: #fff;
+  transition: .22s ease;
   border-radius: 50%;
 }
 
 input:checked + .status-slider {
-  background-color: #1c2423;
-  border-color: #1c2423;
+  background-color: #409eff;
+  border-color: #409eff;
 }
 
 input:checked + .status-slider:after {
   content: "开";
   right: auto;
-  left: 9px;
-  color: #fff;
+  left: 7px;
 }
 
 input:checked + .status-slider:before {
-  transform: translateX(32px);
+  transform: translateX(22px);
 }
 
 .status-badge {
@@ -73,23 +72,23 @@ input:checked + .status-slider:before {
   justify-content: center;
   gap: 0.5rem;
   padding: 0.25rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.875rem;
-  font-weight: 500;
-  min-width: 58px;
-  height: 1.75rem;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 400;
+  min-width: 52px;
+  height: 24px;
 }
 
 .status-badge.enabled {
-  background: #1c2423;
-  color: #fff;
-  border: 1px solid #1c2423;
+  background: #ecf5ff;
+  color: #409eff;
+  border: 1px solid #d9ecff;
 }
 
 .status-badge.disabled {
-  background: #fff;
-  color: #1c2423;
-  border: 1px solid #1c2423;
+  background: #f4f4f5;
+  color: #909399;
+  border: 1px solid #e9e9eb;
 }
 
 .account-status-cell {
@@ -1715,19 +1714,19 @@ input:checked + .status-slider:before {
 
 @media (max-width: 768px) {
   .status-toggle {
-    width: 40px;
+    width: 46px;
     height: 20px;
   }
 
   .status-slider:before {
-    height: 14px;
-    width: 14px;
-    left: 3px;
-    bottom: 3px;
+    height: 16px;
+    width: 16px;
+    left: 1px;
+    bottom: 1px;
   }
 
   input:checked + .status-slider:before {
-    transform: translateX(20px);
+    transform: translateX(24px);
   }
 
   .qr-login-btn, .manual-input-btn {
