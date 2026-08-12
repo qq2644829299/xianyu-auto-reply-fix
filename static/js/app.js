@@ -13,6 +13,7 @@ let dashboardData = {
     totalItems: 0
 };
 let pendingAccountManagementFocusId = '';
+let pendingAccountRecovery = null;
 let aboutDiagnosticsAccounts = [];
 let aboutDiagnosticsInitialized = false;
 let dashboardRuntimeRetryTimer = null;
@@ -1061,12 +1062,20 @@ function buildManualInterventionAlert(statusNote, runtimeStatus, options = {}) {
                 <div class="manual-intervention-alert-title">${escapeHtml(alert.title)}</div>
                 <div class="manual-intervention-alert-detail">${escapeHtml(alert.detail)}</div>
             </div>
+            <div class="manual-intervention-alert-actions">
+            ${options.accountId ? `
+                <button type="button" class="manual-intervention-alert-action" data-account-id="${escapeHtml(options.accountId)}" data-has-credentials="${options.hasCredentials ? 'true' : 'false'}" onclick="event.stopPropagation();goToAccountRecovery(this.dataset.accountId, this.dataset.hasCredentials === 'true');">
+                    <i class="bi bi-tools" aria-hidden="true"></i>
+                    ${options.hasCredentials ? '去恢复账号' : '扫码重新登录'}
+                </button>
+            ` : ''}
             ${alert.vncAvailable ? `
                 <a class="manual-intervention-alert-action" href="${escapeHtml(alert.vncUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation();">
-                    <i class="bi bi-display"></i>
+                    <i class="bi bi-display" aria-hidden="true"></i>
                     打开远程桌面
                 </a>
             ` : ''}
+            </div>
         </div>
     `;
 }
@@ -1121,7 +1130,11 @@ function renderDashboardAccountCard(account) {
         renderDashboardAccountMetric('定时擦亮', polishScheduleMetricText, polishScheduleTone)
     ].join('');
     const runtimeSnapshot = renderDashboardAccountRuntimeSnapshot(account.runtime_status);
-    const manualInterventionAlert = buildManualInterventionAlert(statusNoteText, account.runtime_status, { compact: true });
+    const manualInterventionAlert = buildManualInterventionAlert(statusNoteText, account.runtime_status, {
+        compact: true,
+        accountId: account.id,
+        hasCredentials,
+    });
 
     const secondarySummary = [
         {
@@ -1244,7 +1257,10 @@ async function loadDashboard() {
     if (cookiesResponse.ok) {
         const cookiesData = await cookiesResponse.json();
 
-        const accountsWithKeywords = await enrichDashboardAccounts(cookiesData);
+        const [accountsWithKeywords, totalItems] = await Promise.all([
+        enrichDashboardAccounts(cookiesData),
+        loadItemsCount()
+        ]);
 
         dashboardData.accounts = accountsWithKeywords;
         dashboardData.totalKeywords = accountsWithKeywords.reduce((sum, account) => {
@@ -1252,23 +1268,19 @@ async function loadDashboard() {
         return sum + (isEnabled ? (account.keywordCount || 0) : 0);
         }, 0);
 
-        // 加载商品总数
-        const totalItems = await loadItemsCount();
         dashboardData.totalItems = totalItems;
-
-        // 加载订单看板数据
-        const orderMetrics = await loadOrderDashboardMetrics();
-
-        // 加载销售额摘要数据
-        await loadSalesSummary();
-
-        // 加载销售额图表数据（默认显示最近1周）
-        await loadSalesChart('week');
 
         // 更新仪表盘显示
         renderDashboardAccountOverview(accountsWithKeywords, totalItems);
         scheduleDashboardRuntimeAutoRetry(accountsWithKeywords);
-        await loadDashboardDeliveryLogs();
+
+        // 非关键看板并行加载，不再让订单、销售额、图表和日志串行阻塞首屏。
+        Promise.allSettled([
+        loadOrderDashboardMetrics(),
+        loadSalesSummary(),
+        loadSalesChart('week'),
+        loadDashboardDeliveryLogs()
+        ]).catch(error => console.error('加载仪表盘扩展数据失败:', error));
     }
     } catch (error) {
     console.error('加载仪表盘数据失败:', error);
@@ -1320,7 +1332,7 @@ async function refreshDashboardRuntimeSnapshots() {
 // 加载商品总数
 async function loadItemsCount() {
     try {
-        const response = await fetch(`${apiBase}/items`, {
+        const response = await fetch(`${apiBase}/api/items/summary`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
@@ -1331,8 +1343,7 @@ async function loadItemsCount() {
         }
 
         const data = await response.json();
-        const items = Array.isArray(data.items) ? data.items : [];
-        return items.length;
+        return Number(data.total || 0);
     } catch (error) {
         console.error('加载商品总数失败:', error);
         return 0;
@@ -2134,6 +2145,43 @@ function openAccountManagement(accountId) {
         return;
     }
     showSection('accounts');
+}
+
+function goToAccountRecovery(accountId, hasCredentials) {
+    pendingAccountRecovery = {
+        accountId: String(accountId || '').trim(),
+        hasCredentials: Boolean(hasCredentials)
+    };
+    pendingAccountManagementFocusId = pendingAccountRecovery.accountId;
+    if (document.getElementById('accounts-section')?.classList.contains('active')) {
+        openPendingAccountRecovery();
+        return;
+    }
+    showSection('accounts');
+}
+
+async function openPendingAccountRecovery() {
+    if (!pendingAccountRecovery?.accountId) return;
+    const recovery = pendingAccountRecovery;
+    pendingAccountRecovery = null;
+
+    if (!recovery.hasCredentials) {
+        showToast('该账号未配置账密，请扫码重新登录；成功后系统会更新 Cookie。', 'warning');
+        showQRCodeLogin('lite');
+        return;
+    }
+
+    document.getElementById('manualInputForm').style.display = 'none';
+    document.getElementById('passwordLoginForm').style.display = 'none';
+    const refreshForm = document.getElementById('refreshCookieForm');
+    refreshForm.style.display = 'block';
+    document.getElementById('refreshCookieFormElement').reset();
+    await loadRefreshCookieAccountList();
+    const select = document.getElementById('refreshCookieAccountSelect');
+    select.value = recovery.accountId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    refreshForm.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    showToast('已打开账号恢复，请点击“验证并刷新 Cookie”。', 'info');
 }
 
 function focusPendingAccountManagementRow() {
@@ -4669,7 +4717,10 @@ function renderAboutRuntimeStatus(runtimeStatus) {
                 <div class="account-diagnostics-status-note-title">${escapeHtml(overview.title)}</div>
                 <div class="account-diagnostics-status-note-text">${escapeHtml(overview.note)}</div>
             </div>
-            ${buildManualInterventionAlert(selectedAccount?.status_note || '', runtimeStatus)}
+            ${buildManualInterventionAlert(selectedAccount?.status_note || '', runtimeStatus, {
+                accountId: selectedAccount?.id || '',
+                hasCredentials: Boolean(selectedAccount?.username) && Boolean(selectedAccount?.has_password),
+            })}
             ${buildAboutVncAccessPanel(runtimeStatus)}
             <div class="account-diagnostics-status-body">
                 <div class="account-diagnostics-status-primary">
@@ -5285,6 +5336,7 @@ async function loadCookies() {
     // 重新初始化工具提示
     initTooltips();
     focusPendingAccountManagementRow();
+    await openPendingAccountRecovery();
 
     } catch (err) {
     // 错误已在fetchJSON中处理
@@ -22152,6 +22204,7 @@ async function getBenefitsInfo() {
 let captchaSessionMonitor = null;
 let activeCaptchaModal = null;
 let monitoredSessions = new Set();
+let captchaSessionMonitorInFlight = false;
 
 // 开始监控验证会话
 function startCaptchaSessionMonitor() {
@@ -22163,7 +22216,9 @@ function startCaptchaSessionMonitor() {
     console.log('🔍 开始监控验证会话...');
     
     let checkCount = 0;
-    captchaSessionMonitor = setInterval(async () => {
+    const pollCaptchaSessions = async () => {
+        if (captchaSessionMonitorInFlight) return;
+        captchaSessionMonitorInFlight = true;
         try {
             checkCount++;
             const response = await fetch('/api/captcha/sessions');
@@ -22206,8 +22261,13 @@ function startCaptchaSessionMonitor() {
             }
         } catch (error) {
             console.error('监控验证会话失败:', error);
+        } finally {
+            captchaSessionMonitorInFlight = false;
         }
-    }, 1000); // 每秒检查一次
+    };
+    // 首次加载只探测一次；请求完成前不重入，避免慢链路下堆积轮询。
+    captchaSessionMonitor = setInterval(pollCaptchaSessions, 10000);
+    window.setTimeout(pollCaptchaSessions, 1500);
     
     console.log('✅ 会话监控已启动');
 }
@@ -22217,6 +22277,7 @@ function stopCaptchaSessionMonitor() {
     if (captchaSessionMonitor) {
         clearInterval(captchaSessionMonitor);
         captchaSessionMonitor = null;
+        captchaSessionMonitorInFlight = false;
         monitoredSessions.clear();
         console.log('⏹️ 停止监控验证会话');
     }

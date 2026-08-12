@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, F
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 from typing import List, Tuple, Optional, Dict, Any, Callable, Awaitable
 from pathlib import Path
@@ -1191,6 +1192,9 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# 压缩大型商品详情与历史消息响应，降低公网传输和浏览器等待时间。
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 # 注册刮刮乐远程控制路由
 if CAPTCHA_ROUTER_AVAILABLE:
@@ -10269,6 +10273,17 @@ def get_all_items(current_user: Dict[str, Any] = Depends(get_current_user)):
         return {"items": all_items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取商品信息失败: {str(e)}")
+
+
+@app.get("/api/items/summary")
+def get_items_summary(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """仪表盘商品摘要；只做 COUNT，避免下载全部商品详情。"""
+    user_id = current_user['user_id']
+    user_cookies = db_manager.get_all_cookies(user_id)
+    return {
+        "total": db_manager.count_items_by_cookies(list(user_cookies.keys())),
+        "account_count": len(user_cookies),
+    }
 
 
 # ==================== 商品搜索 API ====================

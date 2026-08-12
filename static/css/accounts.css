@@ -169,7 +169,17 @@
   font-weight: 600;
   line-height: 1.2;
   text-decoration: none;
+  border: 0;
+  cursor: pointer;
   transition: background-color var(--duration) var(--ease);
+}
+
+.manual-intervention-alert-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex: 0 0 auto;
 }
 
 .manual-intervention-alert-action:hover,

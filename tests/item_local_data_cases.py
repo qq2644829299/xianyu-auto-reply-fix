@@ -87,6 +87,11 @@ class ItemLocalDataTests(unittest.TestCase):
         self.assertEqual(item['item_description'], 'Original description')
         self.assertEqual(item['item_detail_parsed']['seller_notes'], 'delivery after payment')
 
+    def test_item_count_does_not_require_loading_item_details(self):
+        self.assertEqual(self.db.count_items_by_cookies([self.cookie_id]), 1)
+        self.assertEqual(self.db.count_items_by_cookies(['missing-account']), 0)
+        self.assertEqual(self.db.count_items_by_cookies([]), 0)
+
     def test_batch_item_query_hydrates_delivery_card_without_per_item_lookup(self):
         card_id = self.db.create_card('Demo delivery', 'text', text_content='hello', user_id=1)
         self.assertTrue(self.db.update_item_delivery_card(self.cookie_id, self.item_id, card_id))

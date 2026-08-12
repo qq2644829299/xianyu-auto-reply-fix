@@ -6906,6 +6906,31 @@ Cookie数量: {cookie_count}
             logger.error(f"获取Cookie商品信息失败: {e}")
             return []
 
+    def count_items_by_cookies(self, cookie_ids: Optional[List[str]] = None) -> int:
+        """轻量统计指定账号的商品数量，不读取商品详情大字段。"""
+        normalized_cookie_ids = [
+            str(value).strip() for value in (cookie_ids or []) if str(value).strip()
+        ]
+        if cookie_ids is not None and not normalized_cookie_ids:
+            return 0
+
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                if normalized_cookie_ids:
+                    placeholders = ", ".join("?" for _ in normalized_cookie_ids)
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM item_info WHERE cookie_id IN ({placeholders})",
+                        normalized_cookie_ids,
+                    )
+                else:
+                    cursor.execute("SELECT COUNT(*) FROM item_info")
+                row = cursor.fetchone()
+                return int(row[0] or 0) if row else 0
+        except Exception as e:
+            logger.error(f"统计商品数量失败: {e}")
+            return 0
+
     def get_items_with_delivery_cards(self, cookie_ids: Optional[List[str]] = None,
                                       user_id: Optional[int] = None) -> List[Dict]:
         """批量读取商品及其绑定卡券，避免页面逐商品查询卡券。
