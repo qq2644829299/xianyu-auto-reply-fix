@@ -24407,3 +24407,66 @@ async function savePolishSchedule() {
         console.error('保存定时擦亮设置失败:', error);
     }
 }
+
+// Upgrade every legacy Bootstrap `.form-switch` to the shared Switch component.
+// The original input node is moved rather than recreated, so IDs, event listeners,
+// values and form submission behavior remain intact.
+function upgradeLegacySwitches(root = document) {
+    const containers = root.querySelectorAll?.('.form-check.form-switch:not([data-switch-upgraded])') || [];
+    containers.forEach((container) => {
+        const input = container.querySelector('input.form-check-input[type="checkbox"]');
+        if (!input) return;
+
+        const labels = Array.from(container.querySelectorAll('label.form-check-label'));
+        const labelText = labels.map((label) => label.textContent.trim()).filter(Boolean).join(' ');
+        const externalLabel = labels[0]?.cloneNode(true);
+
+        container.dataset.switchUpgraded = 'true';
+        container.className = `${container.className.replace(/\bform-check\b|\bform-switch\b/g, '').trim()} el-switch-field`.trim();
+        container.replaceChildren();
+
+        const switchLabel = document.createElement('label');
+        switchLabel.className = 'el-switch';
+        switchLabel.htmlFor = input.id;
+        input.className = 'el-switch__input';
+        input.setAttribute('role', 'switch');
+
+        const core = document.createElement('span');
+        core.className = 'el-switch__core';
+        core.setAttribute('aria-hidden', 'true');
+        const action = document.createElement('span');
+        action.className = 'el-switch__action';
+        core.append(action);
+        switchLabel.append(input, core);
+        container.append(switchLabel);
+
+        if (externalLabel) {
+            externalLabel.className = 'el-switch-field__label';
+            externalLabel.htmlFor = input.id;
+            container.append(externalLabel);
+        } else if (labelText) {
+            const textLabel = document.createElement('label');
+            textLabel.className = 'el-switch-field__label';
+            textLabel.htmlFor = input.id;
+            textLabel.textContent = labelText;
+            container.append(textLabel);
+        }
+    });
+}
+
+function initializeSwitchComponents() {
+    upgradeLegacySwitches();
+    new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => mutation.addedNodes.forEach((node) => {
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+            if (node.matches?.('.form-check.form-switch')) upgradeLegacySwitches(node.parentElement);
+            upgradeLegacySwitches(node);
+        }));
+    }).observe(document.body, { childList: true, subtree: true });
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeSwitchComponents, { once: true });
+} else {
+    initializeSwitchComponents();
+}
