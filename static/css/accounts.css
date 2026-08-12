@@ -21,8 +21,8 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: #6b7372;
-  border: 2px solid #4e5755;
+  background-color: #fff;
+  border: 2px solid #1c2423;
   transition: .18s ease;
   border-radius: 24px;
 }
@@ -33,7 +33,7 @@
   right: 8px;
   top: 50%;
   transform: translateY(-50%);
-  color: #fff;
+  color: #1c2423;
   font-size: 12px;
   font-weight: 800;
   line-height: 1;
@@ -46,20 +46,21 @@
   width: 22px;
   left: 2px;
   bottom: 2px;
-  background-color: white;
+  background-color: #1c2423;
   transition: .4s;
   border-radius: 50%;
 }
 
 input:checked + .status-slider {
-  background-color: #087f5b;
-  border-color: #087f5b;
+  background-color: #1c2423;
+  border-color: #1c2423;
 }
 
 input:checked + .status-slider:after {
   content: "开";
   right: auto;
   left: 9px;
+  color: #fff;
 }
 
 input:checked + .status-slider:before {
@@ -80,15 +81,15 @@ input:checked + .status-slider:before {
 }
 
 .status-badge.enabled {
-  background: #dcfce7;
-  color: #166534;
-  border: 1px solid #bbf7d0;
+  background: #1c2423;
+  color: #fff;
+  border: 1px solid #1c2423;
 }
 
 .status-badge.disabled {
-  background: #fef2f2;
-  color: #991b1b;
-  border: 1px solid #fecaca;
+  background: #fff;
+  color: #1c2423;
+  border: 1px solid #1c2423;
 }
 
 .account-status-cell {

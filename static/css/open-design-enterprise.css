@@ -124,7 +124,7 @@ input::placeholder, textarea::placeholder { color: #8a8f97 !important; }
 .form-label { color: #34403e !important; font-size: 12px !important; font-weight: 700 !important; }
 .form-text { color: var(--od-muted) !important; }
 .form-check-input:checked { background-color: var(--od-ink) !important; border-color: var(--od-ink) !important; }
-/* Switches must communicate state with text and contrast, not color alone. */
+/* Switches use position and an explicit label; state is never communicated by color. */
 .form-switch {
   display: inline-flex !important;
   align-items: center;
@@ -136,15 +136,15 @@ input::placeholder, textarea::placeholder { color: #8a8f97 !important; }
   height: 26px !important;
   margin: 0 !important;
   cursor: pointer;
-  border: 2px solid #66706e !important;
+  border: 2px solid #1c2423 !important;
   border-radius: 999px !important;
-  background-color: #66706e !important;
+  background-color: #f8f8f6 !important;
   background-position: 4px center !important;
   box-shadow: none !important;
 }
 .form-switch .form-check-input:checked {
-  border-color: #087f5b !important;
-  background-color: #087f5b !important;
+  border-color: #1c2423 !important;
+  background-color: #1c2423 !important;
   background-position: right 4px center !important;
 }
 .form-switch::after {
@@ -156,8 +156,8 @@ input::placeholder, textarea::placeholder { color: #8a8f97 !important; }
   padding: 0 8px;
   border: 1px solid #b8bfbd;
   border-radius: 999px;
-  color: #4f5957;
-  background: #f2f3f1;
+  color: #1c2423;
+  background: #fff;
   font-size: 12px;
   font-weight: 800;
   line-height: 1;
@@ -165,9 +165,9 @@ input::placeholder, textarea::placeholder { color: #8a8f97 !important; }
 }
 .form-switch:has(.form-check-input:checked)::after {
   content: '已开启';
-  border-color: #087f5b;
-  color: #07563e;
-  background: #dff5e9;
+  border-color: #1c2423;
+  color: #fff;
+  background: #1c2423;
 }
 .form-switch .form-check-input:focus-visible {
   outline: 3px solid rgba(255,95,3,.55) !important;
