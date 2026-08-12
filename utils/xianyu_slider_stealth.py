@@ -1372,6 +1372,32 @@ class XianyuSliderStealth:
                     except Exception as e:
                         logger.debug(f"【{self.pure_user_id}】截取二维码元素失败({selector}): {e}")
 
+            # 闲鱼的 mini_login 验证页常不为二维码图片标注 class/src。
+            # 在二维码所在 frame 内按可见、近正方形的 img/canvas 兜底选择，
+            # 只截该元素，避免把整个登录页缩小成无法扫描的二维码。
+            if screenshot_bytes is None:
+                for scope in qr_scopes:
+                    try:
+                        candidates = []
+                        for candidate in scope.query_selector_all('img, canvas'):
+                            if not candidate.is_visible():
+                                continue
+                            box = candidate.bounding_box() or {}
+                            width = float(box.get('width') or 0)
+                            height = float(box.get('height') or 0)
+                            ratio = width / max(height, 1)
+                            if 80 <= width <= 600 and 80 <= height <= 600 and 0.80 <= ratio <= 1.20:
+                                candidates.append((width * height, candidate, width, height))
+                        if candidates:
+                            _, qr_element, width, height = max(candidates, key=lambda item: item[0])
+                            screenshot_bytes = qr_element.screenshot(timeout=5000)
+                            logger.info(
+                                f"【{self.pure_user_id}】按可见近方形元素截取二维码成功: {width:.0f}x{height:.0f}"
+                            )
+                            break
+                    except Exception as e:
+                        logger.debug(f"【{self.pure_user_id}】兜底扫描二维码元素失败: {e}")
+
             # 方式1：通过 frame.frame_element() 截取 iframe 元素
             if frame is not None and screenshot_bytes is None:
                 try:

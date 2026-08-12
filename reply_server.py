@@ -5517,6 +5517,7 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
     auth_recovery_owner = f"manual_password_login:{session_id}"
     auth_recovery_acquired = False
     login_thread_started = False
+    slider_instance = None
     manual_refresh_preflight_timeout = 45.0
     request_loop = asyncio.get_running_loop()
     try:
@@ -5556,27 +5557,18 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 _update_session_risk_log(session_id, 'failed', error_message='账号正在执行手动刷新')
                 log_with_user('warning', f"账号已存在手动刷新任务，拒绝重复触发: {account_id}", current_user)
                 return
+
+        _set_password_login_session_status(
+            session_id,
+            'processing',
+            phase='waiting_slot',
+            progress_message='正在排队准备安全登录环境…',
+        )
         
         # 导入 XianyuSliderStealth
         from utils.xianyu_slider_stealth import XianyuSliderStealth
         import base64
         import io
-        
-        # 创建 XianyuSliderStealth 实例
-        existing_cookie_info = db_manager.get_cookie_details(account_id) or {}
-        proxy_config = db_manager.get_cookie_proxy_config(account_id)
-        slider_instance = XianyuSliderStealth(
-            user_id=account_id,
-            enable_learning=True,
-            headless=not show_browser,
-            initial_cookies=existing_cookie_info.get('value', ''),
-            proxy=proxy_config,
-        )
-        slider_instance.risk_session_id = password_login_sessions.get(session_id, {}).get('risk_session_id') or session_id
-        slider_instance.risk_trigger_scene = 'manual_password_refresh' if is_refresh_mode else 'password_login'
-        
-        # 更新会话信息
-        password_login_sessions[session_id]['slider_instance'] = slider_instance
         
         # 定义通知回调函数，用于检测到验证时返回验证链接或截图（同步函数）
         def notification_callback(
@@ -5619,6 +5611,11 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                         verification_url=None,
                         qr_code_url=None,
                         verification_type=verification_type_label,
+                        phase='waiting_verification',
+                        progress_message=(
+                            '请使用闲鱼 App 扫描二维码完成验证'
+                            if verification_type == 'qr_verify' else '请在闲鱼 App 完成身份验证'
+                        ),
                     )
                     log_with_user('info', f"账号验证截图已保存: {session_id}, 路径: {actual_screenshot_path}", current_user)
                     
@@ -5666,6 +5663,8 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                         screenshot_path=None,
                         qr_code_url=None,
                         verification_type=verification_type_label,
+                        phase='waiting_verification',
+                        progress_message='请在闲鱼 App 完成身份验证',
                     )
                     log_with_user('info', f"账号验证链接已保存: {session_id}, URL: {verification_url}", current_user)
                     
@@ -5710,10 +5709,38 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
         import threading
 
         def run_login():
+            nonlocal slider_instance
             import asyncio  # 在函数开头导入，避免后续局部import导致UnboundLocalError
             from db_manager import db_manager  # 在函数开头导入，避免作用域问题
             from XianyuAutoAsync import XianyuLive
             try:
+                _set_password_login_session_status(
+                    session_id,
+                    'processing',
+                    phase='starting_browser',
+                    progress_message='正在启动安全登录环境…',
+                )
+                # 构造器会等待并发槽位，最长可达一分钟；只能在后台线程运行，
+                # 否则会阻塞 FastAPI 事件循环，令前端无法轮询到进度。
+                existing_cookie_info = db_manager.get_cookie_details(account_id) or {}
+                proxy_config = db_manager.get_cookie_proxy_config(account_id)
+                slider_instance = XianyuSliderStealth(
+                    user_id=account_id,
+                    enable_learning=True,
+                    headless=True,
+                    initial_cookies=existing_cookie_info.get('value', ''),
+                    proxy=proxy_config,
+                )
+                slider_instance.risk_session_id = password_login_sessions.get(session_id, {}).get('risk_session_id') or session_id
+                slider_instance.risk_trigger_scene = 'manual_password_refresh' if is_refresh_mode else 'password_login'
+                if session_id in password_login_sessions:
+                    password_login_sessions[session_id]['slider_instance'] = slider_instance
+                _set_password_login_session_status(
+                    session_id,
+                    'processing',
+                    phase='submitting_credentials',
+                    progress_message='正在提交账号信息并等待闲鱼响应…',
+                )
                 cookies_dict = slider_instance.login_with_password_playwright(
                     account=account,
                     password=password,
@@ -5960,7 +5987,9 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                     'success',
                     account_id=account_id,
                     is_new_account=is_new_account,
-                    cookie_count=len(merged_cookies_dict)
+                    cookie_count=len(merged_cookies_dict),
+                    phase='completed',
+                    progress_message='登录成功，正在刷新账号状态…',
                 )
                 _close_password_login_pending_verification_risk_logs(
                     session_id,
@@ -6025,7 +6054,7 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 # 清理实例（释放并发槽位）
                 try:
                     from utils.xianyu_slider_stealth import concurrency_manager
-                    if concurrency_manager.unregister_instance(account_id, slider_instance):
+                    if slider_instance and concurrency_manager.unregister_instance(account_id, slider_instance):
                         log_with_user('debug', f"已释放并发槽位: {account_id}", current_user)
                 except Exception as cleanup_e:
                     log_with_user('warning', f"清理实例时出错: {str(cleanup_e)}", current_user)
@@ -6562,7 +6591,8 @@ async def password_login(
             'success': True,
             'session_id': session_id,
             'status': 'processing',
-            'message': '登录任务已启动，请等待...'
+            'phase': 'queued',
+            'message': '登录任务已创建，正在排队…'
         }
         
     except Exception as e:
@@ -6625,6 +6655,8 @@ async def check_password_login_status(
                 'screenshot_path': screenshot_path,
                 'qr_code_url': session.get('qr_code_url'),  # 保留兼容性
                 'verification_type': verification_type,
+                'phase': session.get('phase') or 'waiting_verification',
+                'progress_message': session.get('progress_message') or '请在闲鱼 App 完成验证',
                 'message': f'需要{verification_type}，请查看验证截图' if screenshot_path else f'需要{verification_type}，请点击验证链接'
             }
         elif status == 'success':
@@ -6652,7 +6684,8 @@ async def check_password_login_status(
             # 处理中
             return {
                 'status': 'processing',
-                'message': '登录处理中，请稍候...'
+                'phase': session.get('phase') or 'processing',
+                'message': session.get('progress_message') or '登录处理中，请稍候...'
             }
         
     except Exception as e:

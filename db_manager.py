@@ -4935,9 +4935,19 @@ Cookie数量: {cookie_count}
             return False
 
     async def send_platform_account_alert(self, cookie_id: str, *, email_override: str = None) -> bool:
-        """用平台 SES 向账号所属用户发送登录/Cookie 异常提醒。"""
+        """用平台 SES 向账号所属用户发送登录/Cookie 异常提醒。
+
+        账号异常提醒属于自动发货的保障通知：只有自动发货权益仍有效的
+        账号所属用户才接收，管理员继续沿用其无限权益。
+        """
         try:
             user_id = self.get_cookie_owner_id(cookie_id) if cookie_id else None
+            if not user_id:
+                logger.info(f'账号 {cookie_id} 未关联用户，跳过平台异常提醒')
+                return False
+            if not self.has_active_feature_subscription(user_id, 'auto_delivery'):
+                logger.info(f'账号 {cookie_id} 所属用户未开通或已到期自动发货，跳过平台异常提醒')
+                return False
             user = self.get_user_by_id(user_id) if user_id else None
             email = str(email_override or (user or {}).get('email') or '').strip()
             username = str((user or {}).get('username') or '鱼智云用户').strip()

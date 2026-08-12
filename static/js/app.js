@@ -14623,6 +14623,13 @@ async function handlePasswordLogin(event) {
     }
 }
 
+function setPasswordLoginProgress(message) {
+    const submitBtn = document.querySelector('#passwordLoginFormElement button[type="submit"]');
+    if (!submitBtn || !message) return;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>${message}`;
+}
+
 // 开始检查账号密码登录状态
 function startPasswordLoginCheck() {
     clearPasswordLoginCheck();
@@ -14662,9 +14669,10 @@ async function checkPasswordLoginStatus() {
             
             switch (data.status) {
                 case 'processing':
-                    // 处理中，继续等待
+                    setPasswordLoginProgress(data.message || '正在登录…');
                     break;
                 case 'verification_required':
+                    setPasswordLoginProgress(data.progress_message || '请扫描二维码完成验证');
                     // 需要身份验证，显示验证截图或链接
                     showPasswordLoginQRCode(
                         data.qr_code_url || data.screenshot_path || data.verification_url,
