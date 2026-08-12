@@ -132,7 +132,8 @@ sudo mkdir -p "$backup"
 sudo tar -C "$root" --exclude=static/uploads -czf "$backup/static.tar.gz" static
 sudo tar -xzf "$archive" --no-same-owner --no-same-permissions -C "$root"
 curl -fsS "$health" >/dev/null
-curl -fsS http://127.0.0.1:8090/static/index.html | grep -q 'static/css/app.css'
+page_html="$(curl -fsS http://127.0.0.1:8090/static/index.html)"
+grep -q 'static/css/app.css' <<<"$page_html"
 find "$root/backups/deploy-static" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | tail -n +$((keep + 1)) | cut -d' ' -f2- | xargs -r sudo rm -rf
 echo "Static deployment complete: $release"
 REMOTE
