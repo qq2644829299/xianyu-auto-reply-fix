@@ -5746,7 +5746,10 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                     password=password,
                     show_browser=show_browser,
                     notification_callback=notification_callback,
-                    force_clean_context=is_refresh_mode
+                    force_clean_context=is_refresh_mode,
+                    # 手动刷新遇到平台滑块时立刻结束并返回清晰提示，
+                    # 避免后台反复等待造成前端长期无响应。
+                    stop_on_slider=is_refresh_mode,
                 )
                 
                 if cookies_dict is None:

@@ -11048,7 +11048,8 @@ class XianyuSliderStealth:
     
     def login_with_password_playwright(self, account: str, password: str, show_browser: bool = False,
                                       notification_callback: Optional[Callable] = None,
-                                      force_clean_context: bool = False) -> dict:
+                                      force_clean_context: bool = False,
+                                      stop_on_slider: bool = False) -> dict:
         """使用Playwright进行密码登录（新方法，替代DrissionPage）
         
         Args:
@@ -11426,6 +11427,22 @@ class XianyuSliderStealth:
                                     continue
                         
                         if has_slider:
+                            # 手动刷新不应在滑块页中反复等待或尝试，避免页面持续显示“加载中”。
+                            # 该场景交由用户通过扫码登录完成平台要求的身份验证后再恢复账号。
+                            if stop_on_slider:
+                                verification_url = (
+                                    detected_slider_frame.url
+                                    if detected_slider_frame and hasattr(detected_slider_frame, 'url')
+                                    else getattr(page, 'url', None)
+                                )
+                                message = '闲鱼要求滑块验证，已停止本次账密刷新。请使用“扫码登录”完成账号验证后再继续。'
+                                logger.warning(f"【{self.pure_user_id}】{message}")
+                                self._start_password_login_slider_risk_log(
+                                    verification_url=verification_url,
+                                    detection_phase='manual_refresh_slider_stop',
+                                )
+                                return self._fail_login(message)
+
                             # 设置检测到的frame，供solve_slider使用
                             self._detected_slider_frame = detected_slider_frame
                             if effective_clean_context:
