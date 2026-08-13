@@ -124,9 +124,15 @@ class CaptchaRemoteController:
             # 优先查找整个验证码容器（不是按钮）
             container_selectors = [
                 '#nocaptcha',  # 完整的验证码容器
+                '.nc_1_nocaptcha',
+                '#baxia-dialog-content',
+                '#baxia-dialog',
+                '[id*="baxia"]',
+                '[class*="baxia"]',
                 '.scratch-captcha-container',
                 '[id*="captcha"]',
-                '.nc-container'
+                '.nc-container',
+                '[class*="nc-container"]'
             ]
             
             # 先在主页面查找

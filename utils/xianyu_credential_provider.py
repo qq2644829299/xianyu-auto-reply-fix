@@ -10,6 +10,7 @@ import asyncio
 import time
 import uuid
 import shutil
+from urllib.parse import urlparse
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -129,15 +130,36 @@ class XianyuCredentialProvider:
                 '(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
             ),
         )
+        # verification_url is issued by the login-token request and can redirect
+        # between goofish / taobao verification hosts.  The old code injected the
+        # fresh session only for .goofish.com, leaving the verification page in a
+        # new browser without the very cookies which created the one-time QR.
+        # Keep the browser context coherent across the official Alibaba domains;
+        # this is only session preservation for a user-completed verification,
+        # never an attempt to solve or bypass it.
+        parsed_url = urlparse(context.verification_url)
+        target_host = (parsed_url.hostname or '').lower()
+        cookie_domains = {'.goofish.com', '.taobao.com', '.tmall.com', '.alibaba.com'}
+        if target_host:
+            labels = target_host.split('.')
+            if len(labels) >= 2:
+                cookie_domains.add('.' + '.'.join(labels[-2:]))
+            cookie_domains.add(target_host)
+
         cookies = []
         for name, value in trans_cookies(context.cookie).items():
-            cookies.append({'name': name, 'value': str(value), 'domain': '.goofish.com', 'path': '/'})
+            for domain in cookie_domains:
+                cookies.append({'name': name, 'value': str(value), 'domain': domain, 'path': '/'})
         if cookies:
             await browser_context.add_cookies(cookies)
         page = await browser_context.new_page()
         try:
+            logger.info('Opening official verification page for account {} on host {}', context.account_id, target_host or 'unknown')
             await page.goto(context.verification_url, wait_until='domcontentloaded', timeout=30000)
-            await page.wait_for_timeout(1200)
+            # Wait for the official page to finish its redirect/render cycle
+            # before exposing it to the human operator.  Capturing an earlier
+            # intermediate page produces a QR that the phone later calls stale.
+            await page.wait_for_timeout(2500)
             session_id = f'credential-{context.account_id}-{uuid.uuid4().hex[:12]}'
             await captcha_controller.create_session(session_id, page)
         except Exception:
