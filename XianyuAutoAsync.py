@@ -7489,6 +7489,14 @@ class XianyuLive:
                         verification_url = (res_json.get('data') or {}).get('url') or ''
                         self.last_token_refresh_status = "verification_pending_manual"
                         self.last_token_refresh_error_message = "获取业务连接凭证需要完成闲鱼官方安全验证"
+                        try:
+                            from utils.xianyu_credential_provider import xianyu_credential_provider
+                            xianyu_credential_provider.mark_verification_required(
+                                self.cookie_id, self.user_id or 0, transient_recovery_cookies_str,
+                                self.device_id, verification_url,
+                            )
+                        except Exception as context_error:
+                            logger.warning(f"【{self.cookie_id}】保存人工验证上下文失败: {self._safe_str(context_error)}")
                         logger.warning(
                             f"【{self.cookie_id}】Token获取触发官方安全验证，已暂停当前凭证链路，"
                             f"不会自动处理验证码: {verification_url or '无验证URL'}"

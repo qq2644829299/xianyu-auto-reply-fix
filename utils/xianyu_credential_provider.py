@@ -82,6 +82,22 @@ class XianyuCredentialProvider:
             "updated_at": context.updated_at,
         }
 
+    def mark_verification_required(self, account_id: str, user_id: int, cookie: str,
+                                   device_id: str, verification_url: Optional[str]) -> LoginContext:
+        """供运行中的连接链路暂停时登记原始上下文，不重新发起 token 请求。"""
+        parsed = trans_cookies(cookie or "")
+        context = self._contexts.get(str(account_id)) or LoginContext(
+            account_id=str(account_id), user_id=int(user_id or 0), cookie=str(cookie or ""),
+            xianyu_user_id=str(parsed.get("unb") or ""), device_id=str(device_id or ""),
+        )
+        context.cookie = str(cookie or context.cookie)
+        context.device_id = str(device_id or context.device_id)
+        context.stage = AcquireStatus.VERIFY_REQUIRED
+        context.verification_url = str(verification_url or "") or None
+        context.updated_at = time.time()
+        self._contexts[str(account_id)] = context
+        return context
+
     def validate_credential(self, credential: Optional[XianyuConnectionCredential]) -> bool:
         return bool(
             credential
