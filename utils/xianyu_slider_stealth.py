@@ -10286,6 +10286,17 @@ class XianyuSliderStealth:
         """
         try:
             logger.info(f"【{self.pure_user_id}】检测二维码/人脸验证...")
+
+            # 手动刷新 Cookie 的请求必须及时结束。旧逻辑在这里会先自动尝试滑块，
+            # 直到多轮重试结束后上层才知道遇到了滑块，因此页面会长期没有响应。
+            if getattr(self, '_stop_on_slider', False) and self._page_has_slider(page):
+                message = '闲鱼要求滑块验证，已停止本次刷新。请先使用“扫码登录”完成验证。'
+                self.last_login_error = message
+                self._start_password_login_slider_risk_log(
+                    verification_url=getattr(page, 'url', None),
+                    detection_phase='manual_refresh_slider_stop',
+                )
+                raise PasswordLoginVerificationError(message)
             
             # 先检查是否是滑块验证，如果是滑块验证，立即处理并返回
             slider_selectors = [
@@ -11066,6 +11077,8 @@ class XianyuSliderStealth:
             self.last_login_error = ""
             previous_slider_refresh_mode = getattr(self, '_slider_refresh_mode', False)
             self._slider_refresh_mode = force_clean_context
+            previous_stop_on_slider = getattr(self, '_stop_on_slider', False)
+            self._stop_on_slider = bool(stop_on_slider)
             previous_risk_trigger_scene = getattr(self, 'risk_trigger_scene', None)
             inferred_risk_trigger_scene = 'manual_password_refresh' if force_clean_context else 'password_login'
             if not previous_risk_trigger_scene:
@@ -12164,6 +12177,7 @@ class XianyuSliderStealth:
             return self._fail_login(error_message if error_message else "密码登录流程异常")
         finally:
             self._slider_refresh_mode = previous_slider_refresh_mode
+            self._stop_on_slider = previous_stop_on_slider
             self._password_slider_runtime_hardened = False
             self.risk_trigger_scene = previous_risk_trigger_scene
             # 最外层 finally：确保任何退出路径都释放并发槽位
