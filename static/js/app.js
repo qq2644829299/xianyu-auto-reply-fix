@@ -15513,7 +15513,7 @@ function showVerificationRequired(data) {
         </div>
         <div class="mb-4">
             <p class="text-muted mb-3">${remoteControlUrl ? '请在操作页完成滑块；该页面与服务器保存的登录会话相同。' : '二维码通常会自动出现；如果长时间未出现，可尝试使用兜底入口：'}</p>
-            <a href="${verificationEntryUrl}" target="_blank" class="btn btn-outline-warning">
+            <a id="openRemoteCaptchaControl" href="${verificationEntryUrl}" target="${remoteControlUrl ? '_self' : '_blank'}" class="btn btn-outline-warning">
             <i class="bi bi-box-arrow-up-right me-2"></i>
             ${verificationEntryLabel}
             </a>
@@ -15538,6 +15538,22 @@ function showVerificationRequired(data) {
 
     verificationContainer.innerHTML = verificationHtml;
     verificationContainer.style.display = 'block';
+
+    // 远程人工滑块只能有一个控制窗口。过去这里打开新页面后，全局监控又嵌入
+    // 同一会话，两个 WebSocket 交错发送鼠标事件，官方验证必然失败。
+    if (remoteControlUrl) {
+        const controlLink = document.getElementById('openRemoteCaptchaControl');
+        if (controlLink) {
+            controlLink.addEventListener('click', (event) => {
+                event.preventDefault();
+                const parts = new URL(remoteControlUrl, window.location.origin).pathname.split('/');
+                const sessionId = decodeURIComponent(parts[parts.length - 1] || '');
+                if (!sessionId) return;
+                monitoredSessions.add(sessionId);
+                showCaptchaVerificationModal(sessionId);
+            }, { once: true });
+        }
+    }
 
     // 显示Toast提示
     if (!qrCodeVerificationState.toastShown) {

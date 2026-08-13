@@ -306,8 +306,8 @@
         let ctx = null;
         let isMouseDown = false;
         let lastMoveTime = 0;
-        let moveThrottle = 5; // 节流：每10ms最多发送一次（极致流畅）
-        let captchaOffset = {x: 0, y: 0}; // 滑块区域在页面中的偏移量
+        let moveThrottle = 16; // 一帧一条，保证连续手势且不会堆积事件。
+        let captureOrigin = {x: 0, y: 0}; // 当前截图在 Playwright 页面中的真实原点
 
         // 初始化
         document.addEventListener('DOMContentLoaded', () => {
@@ -341,10 +341,11 @@
             }
 
             // 鼠标事件
-            canvas.addEventListener('mousedown', handleMouseDown);
-            canvas.addEventListener('mousemove', handleMouseMove);
-            canvas.addEventListener('mouseup', handleMouseUp);
-            canvas.addEventListener('mouseleave', handleMouseUp);
+            canvas.style.touchAction = 'none';
+            canvas.addEventListener('pointerdown', handleMouseDown);
+            canvas.addEventListener('pointermove', handleMouseMove);
+            canvas.addEventListener('pointerup', handleMouseUp);
+            canvas.addEventListener('pointercancel', handleMouseUp);
         });
 
         function log(message, type = 'info') {
@@ -425,24 +426,19 @@
             if (type === 'session_info') {
                 log('收到会话信息', 'success');
                 
-                // 保存验证码容器偏移量
-                if (data.captcha_info && data.captcha_info.x !== undefined) {
-                    captchaOffset.x = Math.max(0, data.captcha_info.x - 10);
-                    captchaOffset.y = Math.max(0, data.captcha_info.y - 10);
-                    log(`验证码容器偏移: (${captchaOffset.x}, ${captchaOffset.y})`, 'info');
-                    log(`容器大小: ${data.captcha_info.width}x${data.captcha_info.height}`, 'info');
-                }
+                updateCaptureOrigin(data.capture, data.captcha_info);
                 
-                displayScreenshot(data.screenshot);
+                displayScreenshot(data.screenshot, data.capture, data.captcha_info);
             }
 
             else if (type === 'screenshot_update') {
-                displayScreenshot(data.screenshot);
+                displayScreenshot(data.screenshot, data.capture, data.captcha_info);
                 
-                // 如果是在等待验证结果时收到截图更新，说明验证失败
+                // 截图更新只表示服务端刷新了验证页面，不能等同于失败。
+                // 以前这里每次释放后都先显示“验证未通过”，即使官方页面仍在处理中。
                 const currentStatus = document.getElementById('verificationStatus').textContent;
                 if (currentStatus === '验证中...') {
-                    log('⚠️ 验证未通过，请重试', 'error');
+                    log('验证页面已刷新，请等待官方结果或按新画面重试', 'info');
                     document.getElementById('verificationStatus').textContent = '待处理';
                 }
             }
@@ -466,7 +462,21 @@
             }
         }
 
-        function displayScreenshot(base64Image) {
+        function updateCaptureOrigin(capture, captchaInfo) {
+            if (capture && Number.isFinite(Number(capture.origin_x)) && Number.isFinite(Number(capture.origin_y))) {
+                captureOrigin.x = Number(capture.origin_x);
+                captureOrigin.y = Number(capture.origin_y);
+            } else if (captchaInfo && captchaInfo.x !== undefined) {
+                captureOrigin.x = Math.max(0, Number(captchaInfo.x) - 10);
+                captureOrigin.y = Math.max(0, Number(captchaInfo.y) - 10);
+            } else {
+                captureOrigin = {x: 0, y: 0};
+            }
+            log(`截图原点: (${captureOrigin.x}, ${captureOrigin.y})`, 'info');
+        }
+
+        function displayScreenshot(base64Image, capture, captchaInfo) {
+            if (!isMouseDown) updateCaptureOrigin(capture, captchaInfo);
             const img = new Image();
             img.onload = () => {
                 // 调整 canvas 大小（只在必要时调整）
@@ -495,7 +505,9 @@
                 return;
             }
 
+            event.preventDefault();
             isMouseDown = true;
+            canvas.setPointerCapture?.(event.pointerId);
             const coords = getMouseCoords(event);
             
             log(`鼠标按下: (${coords.x}, ${coords.y})`, 'info');
@@ -513,6 +525,7 @@
                 return;
             }
 
+            event.preventDefault();
             // 节流：限制发送频率，避免卡顿
             const now = Date.now();
             if (now - lastMoveTime < moveThrottle) {
@@ -535,7 +548,9 @@
                 return;
             }
 
+            event.preventDefault();
             isMouseDown = false;
+            if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
             const coords = getMouseCoords(event);
             
             log(`鼠标释放: (${coords.x}, ${coords.y})`, 'info');
@@ -561,10 +576,11 @@
             const canvasX = Math.round((event.clientX - rect.left) * scaleX);
             const canvasY = Math.round((event.clientY - rect.top) * scaleY);
             
-            // 转换为页面上的实际坐标（加上偏移量）
+            // 截图是页面 clip，必须使用服务端随截图返回的准确原点。
+            // 页面重排或降级为整页后，旧偏移会让人工拖动落到错误位置。
             return {
-                x: canvasX + captchaOffset.x,
-                y: canvasY + captchaOffset.y
+                x: canvasX + captureOrigin.x,
+                y: canvasY + captureOrigin.y
             };
         }
     </script>

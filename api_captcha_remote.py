@@ -125,7 +125,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
     logger.info(f"🔌 WebSocket 连接建立: {session_id}")
     
-    # 注册 WebSocket 连接
+    # 同一验证码只允许一个控制端。旧窗口仍在发送 move 时会与新窗口交错，
+    # 使人工拖动轨迹失效。
+    previous_websocket = captcha_controller.websocket_connections.get(session_id)
+    if previous_websocket and previous_websocket is not websocket:
+        try:
+            await previous_websocket.close(code=4001, reason='已由新的验证窗口接管')
+        except Exception:
+            pass
     captcha_controller.websocket_connections[session_id] = websocket
     
     try:
@@ -136,6 +143,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 'type': 'session_info',
                 'screenshot': session_data['screenshot'],
                 'captcha_info': session_data['captcha_info'],
+                'capture': session_data.get('capture') or {'origin_x': 0, 'origin_y': 0},
                 'viewport': session_data['viewport']
             })
             
@@ -154,6 +162,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         # 持续接收客户端消息
         while True:
             data = await websocket.receive_json()
+            if captcha_controller.websocket_connections.get(session_id) is not websocket:
+                await websocket.close(code=4001, reason='验证窗口已被替换')
+                return
             msg_type = data.get('type')
             
             if msg_type == 'mouse_event':
@@ -169,16 +180,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if success:
                     # 只在鼠标释放后才检查完成状态
                     if event_type == 'up':
-                        # 等待页面更新（给验证码一些反应时间）
-                        await asyncio.sleep(1.0)
-                        
-                        # 多次确认滑块确实消失
-                        completed = await captcha_controller.check_completion(session_id)
-                        
-                        if completed:
-                            # 再次确认（避免误判）
-                            await asyncio.sleep(0.5)
+                        # 官方验证成功后的页面切换并不总在 1 秒内完成。持续观察一小段
+                        # 时间，避免人工已通过却被本地过早判定为“仍有滑块”。
+                        completed = False
+                        for _ in range(5):
+                            await asyncio.sleep(1.0)
                             completed = await captcha_controller.check_completion(session_id)
+                            if completed:
+                                await asyncio.sleep(0.4)
+                                completed = await captcha_controller.check_completion(session_id)
+                                break
                         
                         if completed:
                             await websocket.send_json({
@@ -189,22 +200,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             break
                         else:
                             # 更新截图显示验证结果
-                            screenshot = await captcha_controller.update_screenshot(session_id)
-                            if screenshot:
+                            snapshot = await captcha_controller.update_screenshot(session_id)
+                            if snapshot:
                                 await websocket.send_json({
                                     'type': 'screenshot_update',
-                                    'screenshot': screenshot
+                                    **snapshot,
                                 })
                     else:
-                        # 按下或移动时，实时更新截图（截取整个验证码容器）
-                        if event_type in ['down', 'move']:
-                            # 截取整个验证码容器，降低质量换取速度
-                            screenshot = await captcha_controller.update_screenshot(session_id, quality=30)
-                            if screenshot:
-                                await websocket.send_json({
-                                    'type': 'screenshot_update',
-                                    'screenshot': screenshot
-                                })
+                        # 拖动时不截屏。截屏会阻塞后续 move 事件、重绘前端画面，
+                        # 使鼠标轨迹被打断，人工滑块永远无法形成连续手势。
+                        pass
             
             elif msg_type == 'check_completion':
                 # 手动检查完成状态
@@ -231,7 +236,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     
     finally:
         # 清理
-        if session_id in captcha_controller.websocket_connections:
+        if captcha_controller.websocket_connections.get(session_id) is websocket:
             del captcha_controller.websocket_connections[session_id]
         
         logger.info(f"🔒 WebSocket 会话结束: {session_id}")
@@ -278,12 +283,12 @@ async def get_session_info(session_id: str):
 @router.get("/screenshot/{session_id}")
 async def get_screenshot(session_id: str):
     """获取最新截图"""
-    screenshot = await captcha_controller.update_screenshot(session_id)
+    snapshot = await captcha_controller.update_screenshot(session_id)
     
-    if not screenshot:
+    if not snapshot:
         raise HTTPException(status_code=404, detail="无法获取截图")
     
-    return {'screenshot': screenshot}
+    return snapshot
 
 
 @router.post("/mouse_event")
@@ -398,4 +403,3 @@ async def captcha_control_page_with_session(session_id: str):
             return HTMLResponse(content=html_content)
     else:
         raise HTTPException(status_code=404, detail="前端页面不存在")
-

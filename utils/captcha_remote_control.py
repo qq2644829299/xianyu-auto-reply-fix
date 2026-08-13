@@ -29,11 +29,12 @@ class CaptchaRemoteController:
         Returns:
             包含会话信息的字典
         """
-        # 获取滑块元素位置
-        captcha_info = await self._get_captcha_info(page)
+        # 验证框常在页面打开后延迟渲染。若此处固定为 None，后续整页截图
+        # 会令前端坐标永远失真，即使 #nocaptcha 稍后已出现也无法正确拖动。
+        captcha_info = await self._wait_for_captcha_info(page)
         
         # 只截取滑块区域，不截取整个页面（性能优化）
-        screenshot_bytes = await self._screenshot_captcha_area(page, captcha_info)
+        screenshot_bytes, capture = await self._screenshot_captcha_area(page, captcha_info)
         screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
         
         # 获取视口大小
@@ -50,6 +51,8 @@ class CaptchaRemoteController:
             'page': page,
             'screenshot': screenshot_base64,
             'captcha_info': captcha_info,
+            'capture': capture,
+            'input_lock': asyncio.Lock(),
             'completed': False,
             'viewport': viewport
         }
@@ -60,10 +63,23 @@ class CaptchaRemoteController:
             'session_id': session_id,
             'screenshot': screenshot_base64,
             'captcha_info': captcha_info,
+            'capture': capture,
             'viewport': self.active_sessions[session_id]['viewport']
         }
+
+    async def _wait_for_captcha_info(self, page: Page, timeout_seconds: float = 8.0):
+        """等待延迟渲染的验证码容器，避免用全页截图启动人工验证。"""
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while True:
+            captcha_info = await self._get_captcha_info(page)
+            if captcha_info:
+                return captcha_info
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.warning("⚠️ 等待验证码容器超时，将使用整页截图并在下一次刷新时重试")
+                return None
+            await asyncio.sleep(0.4)
     
-    async def _screenshot_captcha_area(self, page: Page, captcha_info: Dict[str, Any]) -> bytes:
+    async def _screenshot_captcha_area(self, page: Page, captcha_info: Dict[str, Any]):
         """截取整个验证码容器区域"""
         try:
             if captcha_info and 'x' in captcha_info:
@@ -85,15 +101,22 @@ class CaptchaRemoteController:
                     }
                 )
                 logger.info(f"✅ 截取验证码容器: {width}x{height} (包含完整验证码)")
-                return screenshot_bytes
+                return screenshot_bytes, {
+                    'origin_x': x,
+                    'origin_y': y,
+                    'css_width': width,
+                    'css_height': height,
+                }
             else:
                 # 如果没有找到滑块，截取整个页面
                 logger.warning("未找到滑块位置，截取整个页面")
-                return await page.screenshot(type='jpeg', quality=75, full_page=False)
+                screenshot_bytes = await page.screenshot(type='jpeg', quality=75, full_page=False)
+                return screenshot_bytes, {'origin_x': 0, 'origin_y': 0}
                 
         except Exception as e:
             logger.warning(f"截取滑块区域失败，使用全页面: {e}")
-            return await page.screenshot(type='jpeg', quality=75, full_page=False)
+            screenshot_bytes = await page.screenshot(type='jpeg', quality=75, full_page=False)
+            return screenshot_bytes, {'origin_x': 0, 'origin_y': 0}
     
     async def _get_captcha_info(self, page: Page) -> Dict[str, Any]:
         """获取滑块验证码信息（查找整个容器）"""
@@ -157,38 +180,23 @@ class CaptchaRemoteController:
             logger.error(f"获取滑块信息失败: {e}")
             return None
     
-    async def update_screenshot(self, session_id: str, quality: int = 75) -> Optional[str]:
-        """更新会话的截图（截取整个验证码容器）"""
+    async def update_screenshot(self, session_id: str, quality: int = 75) -> Optional[Dict[str, Any]]:
+        """刷新截图，并带回该截图在 Playwright 页面中的精确原点。"""
         if session_id not in self.active_sessions:
             return None
         
         try:
             page = self.active_sessions[session_id]['page']
-            captcha_info = self.active_sessions[session_id].get('captcha_info')
-            
-            # 截取整个验证码容器
-            if captcha_info and 'x' in captcha_info:
-                x = max(0, captcha_info['x'] - 10)
-                y = max(0, captcha_info['y'] - 10)
-                width = captcha_info['width'] + 20
-                height = captcha_info['height'] + 20
-                
-                screenshot_bytes = await page.screenshot(
-                    type='jpeg',
-                    quality=quality,
-                    clip={'x': x, 'y': y, 'width': width, 'height': height}
-                )
-            else:
-                # 降级方案：截取整个页面
-                screenshot_bytes = await page.screenshot(
-                    type='jpeg',
-                    quality=quality,
-                    full_page=False
-                )
+            # 验证失败后页面可能重排或退化为整页；每次截图重取原点，
+            # 不能把后续拖动继续映射到首次截图的位置。
+            captcha_info = await self._wait_for_captcha_info(page, timeout_seconds=2.0)
+            screenshot_bytes, capture = await self._screenshot_captcha_area(page, captcha_info)
             
             screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
             self.active_sessions[session_id]['screenshot'] = screenshot_base64
-            return screenshot_base64
+            self.active_sessions[session_id]['captcha_info'] = captcha_info
+            self.active_sessions[session_id]['capture'] = capture
+            return {'screenshot': screenshot_base64, 'capture': capture, 'captcha_info': captcha_info}
             
         except Exception as e:
             logger.error(f"更新截图失败: {e}")
@@ -213,6 +221,17 @@ class CaptchaRemoteController:
         
         try:
             page = self.active_sessions[session_id]['page']
+            input_lock = self.active_sessions[session_id].setdefault('input_lock', asyncio.Lock())
+            async with input_lock:
+                return await self._handle_mouse_event_locked(page, event_type, x, y)
+
+        except Exception as e:
+            logger.error(f"处理鼠标事件失败: {e}")
+            return False
+
+    async def _handle_mouse_event_locked(self, page: Page, event_type: str, x: int, y: int) -> bool:
+        """在单会话输入锁内转发事件，防止双 WebSocket 交错操作同一个页面。"""
+        try:
             
             if event_type == 'down':
                 await page.mouse.move(x, y)
@@ -224,6 +243,8 @@ class CaptchaRemoteController:
                 logger.debug(f"鼠标移动: ({x}, {y})")
                 
             elif event_type == 'up':
+                # 浏览器端末次 move 可能被节流；释放前务必把终点补送到 Playwright。
+                await page.mouse.move(x, y)
                 await page.mouse.up()
                 logger.debug(f"鼠标释放: ({x}, {y})")
                 
@@ -234,7 +255,7 @@ class CaptchaRemoteController:
             return True
             
         except Exception as e:
-            logger.error(f"处理鼠标事件失败: {e}")
+            logger.error(f"转发鼠标事件失败: {e}")
             return False
     
     async def check_completion(self, session_id: str) -> bool:
@@ -341,14 +362,14 @@ class CaptchaRemoteController:
                 
                 # 使用自适应刷新：空闲时降低频率
                 if current_time - last_update_time >= interval:
-                    screenshot = await self.update_screenshot(session_id, quality=55)  # 降低质量提升性能
+                    snapshot = await self.update_screenshot(session_id, quality=55)  # 降低质量提升性能
                     
-                    if screenshot and session_id in self.websocket_connections:
+                    if snapshot and session_id in self.websocket_connections:
                         try:
                             ws = self.websocket_connections[session_id]
                             await ws.send_json({
                                 'type': 'screenshot_update',
-                                'screenshot': screenshot
+                                **snapshot,
                             })
                             last_update_time = current_time
                         except:
@@ -365,4 +386,3 @@ class CaptchaRemoteController:
 
 # 全局实例
 captcha_controller = CaptchaRemoteController()
-
