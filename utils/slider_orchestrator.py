@@ -67,14 +67,16 @@ def parse_cookie_string(cookie_text: Optional[str]) -> Dict[str, str]:
 
 
 def extract_x5_cookies(cookies: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
-    """提取 x5/x5sec 相关 Cookie。"""
+    """提取真正表示验证放行的 x5sec 票据。"""
     if not isinstance(cookies, Mapping):
         return {}
 
     result: Dict[str, Any] = {}
     for name, value in cookies.items():
         name_lower = str(name or "").lower()
-        if name_lower.startswith("x5") or "x5sec" in name_lower:
+        # x5sectag 只是风控标签，不代表滑块已经真正放行。旧判断把它也当成
+        # 成功票据，导致系统写回无效 Cookie 后立即再次验证，形成循环。
+        if name_lower in {"x5sec", "x5secdata"} or name_lower.startswith("x5sec_"):
             result[str(name)] = value
     return result
 
