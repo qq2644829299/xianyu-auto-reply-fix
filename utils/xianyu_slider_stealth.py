@@ -144,6 +144,7 @@ def probe_cookie_verification_from_cookie(
     cookie_text: str,
     proxy: Optional[Dict[str, Any]] = None,
     timeout: float = 30,
+    device_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     import requests
 
@@ -191,7 +192,9 @@ def probe_cookie_verification_from_cookie(
         proxy_url = f"{proxy_type}://{auth}{proxy_host}:{proxy_port}"
         proxies = {"http": proxy_url, "https": proxy_url}
 
-    device_id = generate_cookie_verification_device_id(user_id)
+    # 接入流程必须沿用创建登录上下文时的 deviceId；重新生成会让 token
+    # 与后续 WebSocket /reg 的 did 不属于同一条业务会话。
+    device_id = str(device_id or "").strip() or generate_cookie_verification_device_id(user_id)
     ts = str(int(time.time()) * 1000)
     data_val = (
         '{"appKey":"444e9908a51d1cb236a27862abc769c9",'

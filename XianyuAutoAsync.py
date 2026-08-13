@@ -7477,6 +7477,18 @@ class XianyuLive:
 
                     # 检查是否需要滑块验证
                     if self._need_captcha_verification(res_json):
+                        # 登录 Cookie 有效并不代表消息业务凭证可用。安全验证属于这次
+                        # token 获取链路，不能在后台重新登录、换设备或自动拖动验证码。
+                        # 保留现有 Cookie/设备上下文，交给账号接入页人工完成后再继续。
+                        verification_url = (res_json.get('data') or {}).get('url') or ''
+                        self.last_token_refresh_status = "verification_pending_manual"
+                        self.last_token_refresh_error_message = "获取业务连接凭证需要完成闲鱼官方安全验证"
+                        logger.warning(
+                            f"【{self.cookie_id}】Token获取触发官方安全验证，已暂停当前凭证链路，"
+                            f"不会自动处理验证码: {verification_url or '无验证URL'}"
+                        )
+                        return None
+
                         qr_login_grace = self.get_qr_login_grace(self.cookie_id)
                         if qr_login_grace and not qr_login_grace.get('captcha_buffer_used'):
                             logger.warning(f"【{self.cookie_id}】扫码登录后的首轮Token刷新命中风控，执行一次浏览器侧Cookie稳定化后进入稳定期退避，避免继续挤爆")

@@ -35,6 +35,7 @@ from message_filter_service import message_filter_service
 from utils.qr_login import qr_login_manager
 from utils.qr_login_lite import qrcode_login_lite
 from utils.xianyu_utils import trans_cookies
+from utils.xianyu_credential_provider import AcquireStatus, xianyu_credential_provider
 from utils.image_utils import image_manager
 from utils.time_utils import (
     LOCAL_TIMEZONE,
@@ -4284,9 +4285,17 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         'vnc_manual_action_available': False,
         'manual_browser_session_status': None,
         'manual_browser_reason': None,
+        'credential_acquire_status': 'LOGIN_REQUIRED',
+        'credential_verification_required': False,
     }
     if not cleaned_cid:
         return runtime_status
+
+    credential_state = xianyu_credential_provider.status(cleaned_cid)
+    runtime_status['credential_acquire_status'] = credential_state.get('status', 'LOGIN_REQUIRED')
+    runtime_status['credential_verification_required'] = (
+        runtime_status['credential_acquire_status'] == AcquireStatus.VERIFY_REQUIRED.value
+    )
 
     live_instance = None
     try:
@@ -7337,6 +7346,48 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     warning_message = None
                     final_cookies = temp_instance.cookies_str or real_cookies
 
+                    # 扫码 API 仅说明登录 Cookie 已取得。必须先取得 IM 的 accessToken，
+                    # 才允许启动会自动连 WebSocket 的账号任务。
+                    log_with_user('info', f"[{account_id}] API 登录成功，开始获取业务连接凭证", current_user)
+                    acquire_result = await xianyu_credential_provider.acquire(
+                        account_id, user_id, final_cookies,
+                        proxy=getattr(temp_instance, 'proxy_config', None),
+                    )
+                    if acquire_result.status == AcquireStatus.VERIFY_REQUIRED:
+                        verification_url = (acquire_result.context.verification_url if acquire_result.context else None)
+                        message = '扫码登录已完成，但业务连接需要完成闲鱼官方安全验证；验证后请点击“继续获取连接凭证”。'
+                        log_with_user('warning', f"[{account_id}] 获取凭证过程中触发安全验证，已暂停等待人工完成", current_user)
+                        return {
+                            'account_id': account_id,
+                            'is_new_account': is_new_account,
+                            'real_cookie_refreshed': True,
+                            'cookie_length': len(final_cookies),
+                            'credential_status': AcquireStatus.VERIFY_REQUIRED.value,
+                            'verification_url': verification_url,
+                            'task_restarted': False,
+                            'warning_message': message,
+                        }
+                    if acquire_result.status != AcquireStatus.CREDENTIAL_READY or not acquire_result.credential:
+                        warning_message = acquire_result.message or '未取得业务连接凭证，账号任务未启动'
+                        log_with_user('warning', f"[{account_id}] {warning_message}", current_user)
+                        return {
+                            'account_id': account_id,
+                            'is_new_account': is_new_account,
+                            'real_cookie_refreshed': True,
+                            'cookie_length': len(final_cookies),
+                            'credential_status': acquire_result.status.value,
+                            'task_restarted': False,
+                            'warning_message': warning_message,
+                        }
+
+                    final_cookies = acquire_result.credential.cookie
+                    db_manager.update_cookie_account_info(account_id, cookie_value=final_cookies)
+                    XianyuLive.cache_auth_prewarmed_token(
+                        account_id, acquire_result.credential.access_token,
+                        source='credential_provider',
+                    )
+                    log_with_user('info', f"[{account_id}] 已获得完整业务连接凭证，开始建立业务连接", current_user)
+
                     try:
                         if cookie_manager.manager:
                             # 扫码已经完成了人工认证，不能再用“稳定期”拦住新任务的首次认证。
@@ -7425,6 +7476,7 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                         'real_cookie_refreshed': task_restarted,  # 回滚时为 False，成功切换时为 True
                         'cookie_length': len(final_cookies),
                         'token_prewarmed': False,
+                        'credential_status': AcquireStatus.CONNECTING.value if task_restarted else AcquireStatus.FAILED.value,
                         'task_restarted': task_restarted,
                         'warning_message': warning_message
                     }
@@ -7489,6 +7541,37 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
         raise e
 
 
+@app.get("/account-credential/{account_id}")
+async def get_account_credential_status(account_id: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """只返回接入阶段，不泄露 Cookie、Token 或验证上下文。"""
+    account = db_manager.get_cookie_by_id(account_id)
+    if not account or account.get('user_id') != current_user.get('user_id'):
+        raise HTTPException(status_code=404, detail='账号不存在')
+    return {'success': True, **xianyu_credential_provider.status(account_id)}
+
+
+@app.post("/account-credential/{account_id}/resume")
+async def resume_account_credential_acquire(account_id: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """人工完成官方验证后，从原 token 请求继续，不重新登录。"""
+    account = db_manager.get_cookie_by_id(account_id)
+    if not account or account.get('user_id') != current_user.get('user_id'):
+        raise HTTPException(status_code=404, detail='账号不存在')
+    log_with_user('info', f"[{account_id}] 用户已完成官方验证，恢复业务连接凭证获取", current_user)
+    result = await xianyu_credential_provider.resume(account_id, cookie=account.get('cookies_str') or '')
+    if result.status == AcquireStatus.VERIFY_REQUIRED:
+        return {'success': False, 'status': result.status.value, 'message': '官方验证尚未完成，请在闲鱼页面完成后再继续', 'verification_url': result.context.verification_url if result.context else None}
+    if result.status != AcquireStatus.CREDENTIAL_READY or not result.credential:
+        return {'success': False, 'status': result.status.value, 'message': result.message}
+    from XianyuAutoAsync import XianyuLive
+    db_manager.update_cookie_account_info(account_id, cookie_value=result.credential.cookie)
+    XianyuLive.cache_auth_prewarmed_token(account_id, result.credential.access_token, source='credential_resume')
+    if not cookie_manager.manager:
+        return {'success': False, 'status': AcquireStatus.CREDENTIAL_READY.value, 'message': '凭证已取得，任务管理器尚未启动'}
+    cookie_manager.manager.update_cookie(account_id, result.credential.cookie, save_to_db=False)
+    log_with_user('info', f"[{account_id}] 已获得完整连接凭证，正在建立业务连接", current_user)
+    return {'success': True, 'status': AcquireStatus.CONNECTING.value, 'message': '业务连接正在建立'}
+
+
 async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, is_new_account: bool, current_user: Dict[str, Any], error_reason: str) -> Dict[str, Any]:
     """降级处理：当无法获取真实cookie时，保存原始扫码cookie"""
     try:
@@ -7502,6 +7585,29 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
             # 现有账号使用 update_cookie_account_info 避免覆盖其他字段
             db_manager.update_cookie_account_info(account_id, cookie_value=cookies)
             log_with_user('info', f"降级处理 - 现有账号原始cookie已更新: {account_id}", current_user)
+
+        # 即使“补充真实 Cookie”的浏览器步骤失败，也不能直接把 API 登录态
+        # 当作在线。仍先验证 IM accessToken 是否可取得。
+        acquire_result = await xianyu_credential_provider.acquire(account_id, user_id, cookies)
+        if acquire_result.status == AcquireStatus.VERIFY_REQUIRED:
+            return {
+                'account_id': account_id, 'is_new_account': is_new_account,
+                'real_cookie_refreshed': False, 'fallback_reason': error_reason,
+                'cookie_length': len(cookies), 'credential_status': AcquireStatus.VERIFY_REQUIRED.value,
+                'verification_url': acquire_result.context.verification_url if acquire_result.context else None,
+                'task_restarted': False,
+            }
+        if acquire_result.status != AcquireStatus.CREDENTIAL_READY or not acquire_result.credential:
+            return {
+                'account_id': account_id, 'is_new_account': is_new_account,
+                'real_cookie_refreshed': False, 'fallback_reason': error_reason,
+                'cookie_length': len(cookies), 'credential_status': acquire_result.status.value,
+                'task_restarted': False, 'warning_message': acquire_result.message,
+            }
+        cookies = acquire_result.credential.cookie
+        db_manager.update_cookie_account_info(account_id, cookie_value=cookies)
+        from XianyuAutoAsync import XianyuLive
+        XianyuLive.cache_auth_prewarmed_token(account_id, acquire_result.credential.access_token, source='credential_provider_fallback')
 
         # 添加到或更新cookie_manager
         if cookie_manager.manager:
@@ -7518,7 +7624,9 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
             'is_new_account': is_new_account,
             'real_cookie_refreshed': False,
             'fallback_reason': error_reason,
-            'cookie_length': len(cookies)
+            'cookie_length': len(cookies),
+            'credential_status': AcquireStatus.CONNECTING.value,
+            'task_restarted': bool(cookie_manager.manager),
         }
 
     except Exception as fallback_e:

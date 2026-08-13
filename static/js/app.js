@@ -15556,6 +15556,51 @@ function handleQRCodeSuccess(data) {
         task_restarted,
         warning_message
     } = data.account_info;
+    const credentialStatus = data.account_info.credential_status;
+    const verificationUrl = data.account_info.verification_url || '';
+
+    // “扫码成功”只是 API 登录成功。业务凭证被安全验证打断时不要关掉
+    // 弹窗，也不要说账号已连上；让用户完成闲鱼官方页面后从原链路继续。
+    if (credentialStatus === 'VERIFY_REQUIRED') {
+        qrCodeVerificationState.completed = true;
+        clearInterval(qrCodeCheckInterval);
+        qrCodeCheckInterval = null;
+        document.getElementById('statusSpinner').style.display = 'none';
+        document.getElementById('statusText').textContent = '等待完成闲鱼官方验证';
+        showVerificationRequired({ verification_url: verificationUrl });
+        const container = document.getElementById('verificationContainer');
+        if (container && account_id && !document.getElementById('resumeCredentialAcquireButton')) {
+            const button = document.createElement('button');
+            button.id = 'resumeCredentialAcquireButton';
+            button.className = 'btn btn-primary mt-2';
+            button.innerHTML = '<i class="bi bi-arrow-repeat me-2"></i>我已完成验证，继续连接';
+            button.onclick = async () => {
+                button.disabled = true;
+                button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>正在继续获取凭证…';
+                try {
+                    const response = await fetch(`${apiBase}/account-credential/${encodeURIComponent(account_id)}/resume`, {
+                        method: 'POST', headers: { 'Authorization': `Bearer ${authToken}` }
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        document.getElementById('statusText').textContent = '已取得连接凭证，正在建立业务连接…';
+                        showToast('正在建立业务连接，请稍候查看账号状态', 'info');
+                        closeQRCodeLoginModal(1800);
+                    } else {
+                        button.disabled = false;
+                        button.innerHTML = '<i class="bi bi-arrow-repeat me-2"></i>我已完成验证，继续连接';
+                        showToast(result.message || '验证尚未完成', 'warning');
+                    }
+                } catch (error) {
+                    button.disabled = false;
+                    button.innerHTML = '<i class="bi bi-arrow-repeat me-2"></i>我已完成验证，继续连接';
+                    showToast('继续连接失败，请稍后重试', 'danger');
+                }
+            };
+            container.appendChild(button);
+        }
+        return;
+    }
 
     // 构建成功消息
     let successMessage = '';
