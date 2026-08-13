@@ -127,6 +127,12 @@ class XianyuCredentialProvider:
             current.updated_at = time.time()
             return AcquireResult(AcquireStatus.RETRYABLE_ERROR, context=current, message=str(exc))
 
+        # token 请求和验证页可能下发本次会话新增的 Cookie。无论成功或要求验证，
+        # 都必须留在 LoginContext 中，恢复时不能退回扫码时的旧 Cookie。
+        merged = dict(parsed)
+        merged.update(probe.get("session_cookies") or {})
+        current.cookie = "; ".join(f"{key}={value}" for key, value in merged.items())
+
         if probe.get("status") == "verification_required":
             # 关键：Cookie、UNB、deviceId、当前阶段全部保留，仅暂停请求链。
             current.stage = AcquireStatus.VERIFY_REQUIRED
@@ -142,8 +148,6 @@ class XianyuCredentialProvider:
         token = str(data.get("accessToken") or "").strip()
         if probe.get("status") == "cookie_valid" and token:
             # token 请求可能下发新 Cookie，后续连接须使用合并后的值。
-            merged = dict(parsed)
-            merged.update(probe.get("session_cookies") or {})
             current.cookie = "; ".join(f"{key}={value}" for key, value in merged.items())
             credential = XianyuConnectionCredential(
                 user_id=current.xianyu_user_id, cookie=current.cookie,

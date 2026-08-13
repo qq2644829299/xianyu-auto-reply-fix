@@ -7355,6 +7355,8 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     )
                     if acquire_result.status == AcquireStatus.VERIFY_REQUIRED:
                         verification_url = (acquire_result.context.verification_url if acquire_result.context else None)
+                        if acquire_result.context and acquire_result.context.cookie:
+                            db_manager.update_cookie_account_info(account_id, cookie_value=acquire_result.context.cookie)
                         message = '扫码登录已完成，但业务连接需要完成闲鱼官方安全验证；验证后请点击“继续获取连接凭证”。'
                         log_with_user('warning', f"[{account_id}] 获取凭证过程中触发安全验证，已暂停等待人工完成", current_user)
                         return {
@@ -7557,7 +7559,7 @@ async def resume_account_credential_acquire(account_id: str, current_user: Dict[
     if not account or account.get('user_id') != current_user.get('user_id'):
         raise HTTPException(status_code=404, detail='账号不存在')
     log_with_user('info', f"[{account_id}] 用户已完成官方验证，恢复业务连接凭证获取", current_user)
-    result = await xianyu_credential_provider.resume(account_id, cookie=account.get('cookies_str') or '')
+    result = await xianyu_credential_provider.resume(account_id)
     if result.status == AcquireStatus.VERIFY_REQUIRED:
         return {'success': False, 'status': result.status.value, 'message': '官方验证尚未完成，请在闲鱼页面完成后再继续', 'verification_url': result.context.verification_url if result.context else None}
     if result.status != AcquireStatus.CREDENTIAL_READY or not result.credential:
@@ -7590,6 +7592,8 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
         # 当作在线。仍先验证 IM accessToken 是否可取得。
         acquire_result = await xianyu_credential_provider.acquire(account_id, user_id, cookies)
         if acquire_result.status == AcquireStatus.VERIFY_REQUIRED:
+            if acquire_result.context and acquire_result.context.cookie:
+                db_manager.update_cookie_account_info(account_id, cookie_value=acquire_result.context.cookie)
             return {
                 'account_id': account_id, 'is_new_account': is_new_account,
                 'real_cookie_refreshed': False, 'fallback_reason': error_reason,
