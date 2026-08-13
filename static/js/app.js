@@ -14301,6 +14301,10 @@ function toggleRefreshCookieForm() {
         // 加载账号列表到下拉框
         loadRefreshCookieAccountList();
     } else {
+        if (refreshCookiePollingState.sessionId && !refreshCookiePollingState.completed) {
+            void cancelActiveRefreshCookie();
+        }
+        setRefreshCookieProgress({ active: false });
         refreshForm.style.display = 'none';
     }
 }
@@ -14386,8 +14390,12 @@ async function handleRefreshCookie(event) {
         return;
     }
 
-    // 显示loading
-    toggleLoading(true);
+    setRefreshCookieProgress({
+        active: true,
+        phase: 'queued',
+        message: '正在创建刷新任务…',
+        percent: 8,
+    });
 
     try {
         // 调用密码登录API刷新Cookie
@@ -14408,25 +14416,85 @@ async function handleRefreshCookie(event) {
 
         if (data.session_id) {
             // 开始轮询检查登录状态
-            showToast('正在验证账号并刷新Cookie，请稍候...', 'info');
+            setRefreshCookieProgress({
+                active: true,
+                phase: data.phase || 'queued',
+                message: data.message || '正在验证账号并刷新 Cookie…',
+                percent: 12,
+            });
             startRefreshCookiePolling(data.session_id, cookieId);
         } else {
-            toggleLoading(false);
+            setRefreshCookieProgress({ active: false });
             showToast(data.message || '启动刷新失败', 'danger');
         }
     } catch (error) {
-        toggleLoading(false);
+        setRefreshCookieProgress({ active: false });
         console.error('刷新Cookie失败:', error);
         showToast('刷新Cookie失败: ' + error.message, 'danger');
     }
 }
 
 // 更新刷新Cookie状态显示
-function updateRefreshCookieStatus(message) {
+const refreshCookiePhaseProgress = {
+    queued: 10,
+    waiting_slot: 18,
+    starting_browser: 35,
+    submitting_credentials: 55,
+    waiting_verification: 72,
+    preflight: 86,
+    completed: 100,
+    processing: 40,
+};
+
+let refreshCookieStartedAt = 0;
+let refreshCookieElapsedTimer = null;
+
+function setRefreshCookieProgress({ active, phase = 'processing', message = '', percent = null } = {}) {
+    const panel = document.getElementById('refreshCookieProgress');
+    const button = document.getElementById('refreshCookieSubmitBtn');
+    const buttonLabel = button?.querySelector('.button-label');
+    const bar = document.getElementById('refreshCookieProgressBar');
+    const text = document.getElementById('refreshCookieProgressText');
+    const elapsed = document.getElementById('refreshCookieProgressElapsed');
+    const select = document.getElementById('refreshCookieAccountSelect');
+
+    if (!panel || !button || !bar || !text) return;
+
+    if (!active) {
+        panel.classList.add('d-none');
+        button.disabled = false;
+        if (buttonLabel) buttonLabel.textContent = '验证并刷新Cookie';
+        if (select) select.disabled = false;
+        if (refreshCookieElapsedTimer) clearInterval(refreshCookieElapsedTimer);
+        refreshCookieElapsedTimer = null;
+        refreshCookieStartedAt = 0;
+        return;
+    }
+
+    panel.classList.remove('d-none');
+    button.disabled = true;
+    if (buttonLabel) buttonLabel.textContent = '刷新进行中…';
+    if (select) select.disabled = true;
+    text.textContent = message || '正在处理，请稍候…';
+    bar.style.width = `${Math.max(8, Math.min(100, percent ?? refreshCookiePhaseProgress[phase] ?? 40))}%`;
+    bar.setAttribute('aria-valuenow', String(percent ?? refreshCookiePhaseProgress[phase] ?? 40));
+
+    if (!refreshCookieStartedAt) {
+        refreshCookieStartedAt = Date.now();
+        refreshCookieElapsedTimer = setInterval(() => {
+            if (elapsed && refreshCookieStartedAt) {
+                elapsed.textContent = `${Math.floor((Date.now() - refreshCookieStartedAt) / 1000)} 秒`;
+            }
+        }, 1000);
+    }
+}
+
+function updateRefreshCookieStatus(message, phase = 'processing') {
     const statusDiv = document.getElementById('refreshCookieAccountStatus');
     if (statusDiv) {
         statusDiv.innerHTML = `<span class="text-info"><i class="bi bi-hourglass-split me-1"></i>${message}</span>`;
     }
+    setRefreshCookieProgress({ active: true, phase, message });
 }
 
 // 轮询检查刷新Cookie状态
@@ -14435,7 +14503,8 @@ let refreshCookiePollingState = {
     sessionId: null,
     cookieId: null,
     inFlight: false,
-    completed: false
+    completed: false,
+    requestFailures: 0
 };
 
 function stopRefreshCookiePolling(sessionId = refreshCookiePollingState.sessionId) {
@@ -14459,7 +14528,8 @@ function startRefreshCookiePolling(sessionId, cookieId) {
         sessionId,
         cookieId,
         inFlight: false,
-        completed: false
+        completed: false,
+        requestFailures: 0
     };
 
     let checkCount = 0;
@@ -14476,7 +14546,7 @@ function startRefreshCookiePolling(sessionId, cookieId) {
         if (checkCount > maxChecks) {
             stopRefreshCookiePolling(sessionId);
             closePasswordLoginQRModal();
-            toggleLoading(false);
+            setRefreshCookieProgress({ active: false });
             showToast('刷新Cookie超时，请重试', 'warning');
             refreshCookiePollingState.inFlight = false;
             return;
@@ -14499,11 +14569,11 @@ function startRefreshCookiePolling(sessionId, cookieId) {
             switch (data.status) {
                 case 'processing':
                     // 处理中，更新状态显示
-                    updateRefreshCookieStatus('正在登录中，请稍候...');
+                    updateRefreshCookieStatus(data.message || '正在登录中，请稍候...', data.phase || 'processing');
                     break;
                 case 'verification_required':
                     // 需要身份验证，显示验证截图或链接
-                    updateRefreshCookieStatus(`需要${getPasswordLoginVerificationTypeLabel(data.verification_type)}，请查看弹出的验证窗口`);
+                    updateRefreshCookieStatus(data.progress_message || `需要${getPasswordLoginVerificationTypeLabel(data.verification_type)}，请查看弹出的验证窗口`, data.phase || 'waiting_verification');
                     // 使用账号密码登录的验证显示函数
                     showPasswordLoginQRCode(
                         data.qr_code_url || data.screenshot_path || data.verification_url,
@@ -14519,12 +14589,13 @@ function startRefreshCookiePolling(sessionId, cookieId) {
                         await new Promise(resolve => setTimeout(resolve, 400));
                     }
                     closePasswordLoginQRModal();
-                    toggleLoading(false);
+                    setRefreshCookieProgress({ active: true, phase: 'completed', message: '刷新成功，正在更新账号状态…', percent: 100 });
                     showToast(`账号 ${cookieId} Cookie刷新成功！`, 'success');
                     // 隐藏表单
                     document.getElementById('refreshCookieForm').style.display = 'none';
                     // 刷新账号列表
                     loadCookies();
+                    setTimeout(() => setRefreshCookieProgress({ active: false }), 650);
                     break;
                 case 'failed':
                 case 'cancelled':
@@ -14533,7 +14604,7 @@ function startRefreshCookiePolling(sessionId, cookieId) {
                 case 'forbidden':
                     stopRefreshCookiePolling(sessionId);
                     closePasswordLoginQRModal();
-                    toggleLoading(false);
+                    setRefreshCookieProgress({ active: false });
                     if (data.status === 'cancelled') {
                         showToast(data.message || '刷新Cookie已取消', 'info');
                     } else {
@@ -14543,6 +14614,14 @@ function startRefreshCookiePolling(sessionId, cookieId) {
             }
         } catch (error) {
             console.error('检查刷新状态失败:', error);
+            refreshCookiePollingState.requestFailures += 1;
+            updateRefreshCookieStatus(`状态连接异常，正在重试（${refreshCookiePollingState.requestFailures}/3）…`, 'processing');
+            if (refreshCookiePollingState.requestFailures >= 3) {
+                stopRefreshCookiePolling(sessionId);
+                closePasswordLoginQRModal();
+                setRefreshCookieProgress({ active: false });
+                showToast('无法获取刷新进度，已停止等待。请重新发起刷新。', 'danger');
+            }
         } finally {
             if (refreshCookiePollingState.sessionId === sessionId) {
                 refreshCookiePollingState.inFlight = false;
@@ -14552,6 +14631,34 @@ function startRefreshCookiePolling(sessionId, cookieId) {
 
     refreshCookieCheckInterval = setInterval(pollRefreshCookieStatus, 2000);
     pollRefreshCookieStatus();
+}
+
+async function cancelActiveRefreshCookie() {
+    const sessionId = refreshCookiePollingState.sessionId;
+    if (!sessionId) {
+        setRefreshCookieProgress({ active: false });
+        return;
+    }
+
+    const cancelButton = document.getElementById('refreshCookieCancelBtn');
+    if (cancelButton) cancelButton.disabled = true;
+    updateRefreshCookieStatus('正在停止本次刷新…', 'processing');
+    try {
+        const response = await fetch(`${apiBase}/password-login/cancel/${sessionId}`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const data = await response.json();
+        stopRefreshCookiePolling(sessionId);
+        closePasswordLoginQRModal();
+        setRefreshCookieProgress({ active: false });
+        showToast(data.message || '已停止本次刷新', data.success ? 'info' : 'warning');
+    } catch (error) {
+        console.error('取消刷新Cookie失败:', error);
+        showToast('停止刷新失败，请稍后重试', 'danger');
+    } finally {
+        if (cancelButton) cancelButton.disabled = false;
+    }
 }
 
 // ========================= 账号密码登录相关函数 =========================

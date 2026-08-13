@@ -521,11 +521,24 @@
                   </div>
                 </div>
                 <div class="col-12">
-                  <button type="submit" class="btn btn-warning">
-                    <i class="bi bi-arrow-repeat me-1"></i>验证并刷新Cookie
+                  <button type="submit" class="btn btn-warning" id="refreshCookieSubmitBtn">
+                    <i class="bi bi-arrow-repeat me-1"></i><span class="button-label">验证并刷新Cookie</span>
                   </button>
                   <button type="button" class="btn btn-secondary ms-2" onclick="toggleRefreshCookieForm()">
                     <i class="bi bi-x-circle me-1"></i>取消
+                  </button>
+                </div>
+                <div class="col-12 d-none" id="refreshCookieProgress" role="status" aria-live="polite">
+                  <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span class="small fw-semibold" id="refreshCookieProgressText">正在准备…</span>
+                    <span class="small text-muted" id="refreshCookieProgressElapsed">0 秒</span>
+                  </div>
+                  <div class="progress" style="height: 7px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-warning" id="refreshCookieProgressBar" style="width: 8%"></div>
+                  </div>
+                  <div class="small text-muted mt-2" id="refreshCookieProgressHint">请不要关闭此页面；如出现扫码或验证提示，请按提示完成。</div>
+                  <button type="button" class="btn btn-sm btn-outline-secondary mt-2" id="refreshCookieCancelBtn" onclick="cancelActiveRefreshCookie()">
+                    <i class="bi bi-x-circle me-1"></i>停止本次刷新
                   </button>
                 </div>
               </form>

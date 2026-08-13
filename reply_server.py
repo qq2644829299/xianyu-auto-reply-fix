@@ -5849,6 +5849,12 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 if is_refresh_mode:
                     try:
                         log_with_user('info', f"刷新模式开始执行Token预检，确认新实例可直接恢复: {account_id}", current_user)
+                        _set_password_login_session_status(
+                            session_id,
+                            'processing',
+                            phase='preflight',
+                            progress_message='登录完成，正在验证新会话是否可用…',
+                        )
                         XianyuLive.mark_manual_refresh_handoff(account_id, source=manual_refresh_owner)
                         temp_xianyu = XianyuLive(
                             cookies_str=cookies_str,
