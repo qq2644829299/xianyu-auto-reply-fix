@@ -7491,10 +7491,11 @@ class XianyuLive:
                         self.last_token_refresh_error_message = "获取业务连接凭证需要完成闲鱼官方安全验证"
                         try:
                             from utils.xianyu_credential_provider import xianyu_credential_provider
-                            xianyu_credential_provider.mark_verification_required(
+                            verification_context = xianyu_credential_provider.mark_verification_required(
                                 self.cookie_id, self.user_id or 0, transient_recovery_cookies_str,
                                 self.device_id, verification_url,
                             )
+                            await xianyu_credential_provider.start_official_verification(verification_context)
                         except Exception as context_error:
                             logger.warning(f"【{self.cookie_id}】保存人工验证上下文失败: {self._safe_str(context_error)}")
                         logger.warning(

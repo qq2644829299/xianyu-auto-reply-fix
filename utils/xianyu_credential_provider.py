@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -50,6 +51,11 @@ class LoginContext:
     device_id: str
     stage: AcquireStatus = AcquireStatus.API_AUTHENTICATED
     verification_url: Optional[str] = None
+    remote_session_id: Optional[str] = None
+    remote_control_url: Optional[str] = None
+    browser: Any = field(default=None, repr=False, compare=False)
+    browser_context: Any = field(default=None, repr=False, compare=False)
+    verification_page: Any = field(default=None, repr=False, compare=False)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -79,6 +85,7 @@ class XianyuCredentialProvider:
         return {
             "status": context.stage.value,
             "verification_url": context.verification_url,
+            "remote_control_url": context.remote_control_url,
             "updated_at": context.updated_at,
         }
 
@@ -97,6 +104,60 @@ class XianyuCredentialProvider:
         context.updated_at = time.time()
         self._contexts[str(account_id)] = context
         return context
+
+    async def start_official_verification(self, context: LoginContext) -> LoginContext:
+        """在服务器保留原 Cookie 的浏览器中打开官方页，供用户手工操作。"""
+        if context.remote_control_url and context.verification_page:
+            return context
+        if not context.verification_url:
+            return context
+        from playwright.async_api import async_playwright
+        from utils.captcha_remote_control import captcha_controller
+
+        playwright = await async_playwright().start()
+        browser = await playwright.chromium.launch(
+            headless=True, args=['--no-sandbox', '--disable-dev-shm-usage']
+        )
+        browser_context = await browser.new_context(
+            viewport={'width': 1280, 'height': 760},
+            user_agent=(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
+            ),
+        )
+        cookies = []
+        for name, value in trans_cookies(context.cookie).items():
+            cookies.append({'name': name, 'value': str(value), 'domain': '.goofish.com', 'path': '/'})
+        if cookies:
+            await browser_context.add_cookies(cookies)
+        page = await browser_context.new_page()
+        try:
+            await page.goto(context.verification_url, wait_until='domcontentloaded', timeout=30000)
+            await page.wait_for_timeout(1200)
+            session_id = f'credential-{context.account_id}-{uuid.uuid4().hex[:12]}'
+            await captcha_controller.create_session(session_id, page)
+        except Exception:
+            await browser.close()
+            await playwright.stop()
+            raise
+        context.browser = (playwright, browser)
+        context.browser_context = browser_context
+        context.verification_page = page
+        context.remote_session_id = session_id
+        context.remote_control_url = f'/api/captcha/control/{session_id}'
+        context.updated_at = time.time()
+        return context
+
+    async def _collect_official_verification_cookies(self, context: LoginContext) -> None:
+        if not context.browser_context:
+            return
+        try:
+            browser_cookies = await context.browser_context.cookies()
+            merged = trans_cookies(context.cookie)
+            merged.update({item['name']: item['value'] for item in browser_cookies if item.get('name')})
+            context.cookie = '; '.join(f'{key}={value}' for key, value in merged.items())
+        except Exception:
+            pass
 
     def validate_credential(self, credential: Optional[XianyuConnectionCredential]) -> bool:
         return bool(
@@ -188,6 +249,7 @@ class XianyuCredentialProvider:
             return AcquireResult(AcquireStatus.LOGIN_REQUIRED, message="没有可恢复的登录上下文")
         context.stage = AcquireStatus.VERIFYING
         context.updated_at = time.time()
+        await self._collect_official_verification_cookies(context)
         # 不调用 login；从被安全验证打断的 token 请求恢复。
         return await self.acquire(account_id, context.user_id, cookie or context.cookie,
                                   proxy=proxy, context=context)

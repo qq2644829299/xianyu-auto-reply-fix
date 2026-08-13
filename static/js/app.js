@@ -15439,7 +15439,8 @@ async function checkQRCodeStatus() {
 function showVerificationRequired(data) {
     const screenshotPath = data.screenshot_path || '';
     const verificationUrl = data.verification_url || '';
-    const renderKey = `${screenshotPath}|${verificationUrl}`;
+    const remoteControlUrl = data.remote_control_url || '';
+    const renderKey = `${screenshotPath}|${verificationUrl}|${remoteControlUrl}`;
     if (qrCodeVerificationState.renderKey === renderKey && renderKey) {
     return;
     }
@@ -15497,7 +15498,9 @@ function showVerificationRequired(data) {
         </div>
         </div>
     `;
-    } else if (verificationUrl) {
+    } else if (remoteControlUrl || verificationUrl) {
+    const verificationEntryUrl = remoteControlUrl || verificationUrl;
+    const verificationEntryLabel = remoteControlUrl ? '打开官方验证操作页' : '打开兜底验证页面';
     verificationHtml = `
         <div class="text-center">
         <div class="mb-4">
@@ -15506,19 +15509,19 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>系统正在准备验证二维码，当前先保留一个兜底链接</strong>
+            <strong>${remoteControlUrl ? '已打开服务器原会话，请在该页手工完成官方验证' : '系统正在准备验证二维码，当前先保留一个兜底链接'}</strong>
         </div>
         <div class="mb-4">
-            <p class="text-muted mb-3">二维码通常会自动出现；如果长时间未出现，可尝试使用兜底入口：</p>
-            <a href="${verificationUrl}" target="_blank" class="btn btn-outline-warning">
+            <p class="text-muted mb-3">${remoteControlUrl ? '请在操作页完成滑块；该页面与服务器保存的登录会话相同。' : '二维码通常会自动出现；如果长时间未出现，可尝试使用兜底入口：'}</p>
+            <a href="${verificationEntryUrl}" target="_blank" class="btn btn-outline-warning">
             <i class="bi bi-box-arrow-up-right me-2"></i>
-            打开兜底验证页面
+            ${verificationEntryLabel}
             </a>
         </div>
         <div class="alert alert-info border-0">
             <i class="bi bi-lightbulb me-2"></i>
             <small>
-            系统仍会继续尝试在当前会话中生成二维码并自动完成后续登录。
+            验证完成后回到这里点击“我已完成验证，继续连接”。系统不会重新登录。
             </small>
         </div>
         </div>
@@ -15567,7 +15570,7 @@ function handleQRCodeSuccess(data) {
         qrCodeCheckInterval = null;
         document.getElementById('statusSpinner').style.display = 'none';
         document.getElementById('statusText').textContent = '等待完成闲鱼官方验证';
-        showVerificationRequired({ verification_url: verificationUrl });
+        showVerificationRequired({ verification_url: verificationUrl, remote_control_url: data.account_info.remote_control_url || '' });
         const container = document.getElementById('verificationContainer');
         if (container && account_id && !document.getElementById('resumeCredentialAcquireButton')) {
             const button = document.createElement('button');
