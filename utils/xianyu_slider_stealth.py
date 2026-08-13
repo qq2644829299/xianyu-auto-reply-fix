@@ -12693,6 +12693,13 @@ class XianyuSliderStealth:
                 else:
                     logger.warning(f"【{self.pure_user_id}】滑块验证失败")
                     monitor_page = self._select_monitor_page(self.context, self.page) or self.page
+                    # 当前页仍是同一个滑块时，不能再交给二维码检测函数重复拖动。
+                    # 旧逻辑会从这里重新进入三轮滑块处理，造成风控失败不断累积，
+                    # 同时让手动刷新请求看起来始终没有响应。
+                    if self._page_has_slider(monitor_page):
+                        logger.warning(f"【{self.pure_user_id}】滑块首次处理失败且页面仍停留在滑块，停止重复验证")
+                        self._save_debug_snapshot("run_failed", getattr(self, "_detected_slider_frame", None))
+                        return False, None
                     has_qr, qr_frame = self._detect_qr_code_verification(monitor_page)
                     if has_qr:
                         logger.warning(f"【{self.pure_user_id}】滑块流程结束后检测到身份验证页，转入验证等待流程")
