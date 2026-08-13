@@ -214,12 +214,30 @@ class SecureConfirm:
 
                     logger.info(f"【{self.cookie_id}】自动确认发货响应: {res_json}")
 
+                    # 平台重复确认时会返回“已发货成功”。这说明先前的确认已经生效，
+                    # 必须按成功处理，避免卡券已发送却一直被标记为待确认。
+                    ret_message = res_json.get('ret', ['未知错误'])[0] if res_json.get('ret') else '未知错误'
+                    already_delivered = (
+                        'ORDER_ALREADY_DELIVERY' in ret_message
+                        or 'ORDER_ALREADY_CONSIGNED' in ret_message
+                        or '已发货成功' in ret_message
+                    )
+
                     # 检查响应结果
-                    if res_json.get('ret') and res_json['ret'][0] == 'SUCCESS::调用成功':
-                        logger.info(f"【{self.cookie_id}】✅ 自动确认发货成功，订单ID: {order_id}")
-                        return {"success": True, "order_id": order_id}
+                    if ret_message == 'SUCCESS::调用成功' or already_delivered:
+                        if already_delivered:
+                            logger.info(
+                                f"【{self.cookie_id}】订单已由平台确认发货，按成功完成：{order_id}"
+                            )
+                        else:
+                            logger.info(f"【{self.cookie_id}】✅ 自动确认发货成功，订单ID: {order_id}")
+                        return {
+                            "success": True,
+                            "order_id": order_id,
+                            "already_delivered": already_delivered,
+                        }
                     else:
-                        error_msg = res_json.get('ret', ['未知错误'])[0] if res_json.get('ret') else '未知错误'
+                        error_msg = ret_message
                         logger.warning(f"【{self.cookie_id}】❌ 自动确认发货失败: {error_msg}")
 
                         if 'FAIL_SYS_SESSION_EXPIRED' in error_msg or 'Session过期' in error_msg:

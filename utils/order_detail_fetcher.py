@@ -16,6 +16,19 @@ from threading import Lock
 from collections import defaultdict
 from utils.time_utils import parse_local_datetime_text_to_db_utc
 
+
+def _chromium_launch_options(headless: bool, browser_args: List[str]) -> Dict[str, Any]:
+    """Docker 镜像使用系统 Chromium，避免依赖不存在的 Playwright 下载目录。"""
+    options: Dict[str, Any] = {'headless': headless, 'args': browser_args}
+    candidates = [os.getenv('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', '').strip()]
+    if os.getenv('DOCKER_ENV') or os.path.exists('/.dockerenv'):
+        candidates.extend(['/usr/bin/chromium', '/usr/bin/chromium-browser'])
+    for executable_path in candidates:
+        if executable_path and os.path.isfile(executable_path) and os.access(executable_path, os.X_OK):
+            options['executable_path'] = executable_path
+            break
+    return options
+
 # 修复Docker环境中的asyncio事件循环策略问题
 if sys.platform.startswith('linux') or os.getenv('DOCKER_ENV'):
     try:
@@ -187,8 +200,7 @@ class OrderDetailFetcher:
 
             logger.info(f"启动浏览器，参数: {browser_args}")
             self.browser = await self._playwright.chromium.launch(
-                headless=headless,
-                args=browser_args
+                **_chromium_launch_options(headless=headless, browser_args=browser_args)
             )
 
             logger.info("浏览器启动成功，创建上下文...")

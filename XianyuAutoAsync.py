@@ -98,6 +98,21 @@ def _is_docker_env() -> bool:
     return bool(os.getenv('DOCKER_ENV') or os.path.exists('/.dockerenv'))
 
 
+def _playwright_launch_options(headless: bool, browser_args: list) -> Dict[str, Any]:
+    """生成浏览器启动参数，Docker 中优先使用镜像已安装的 Chromium。"""
+    options: Dict[str, Any] = {'headless': headless, 'args': browser_args}
+    configured_path = os.getenv('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', '').strip()
+    candidates = [configured_path]
+    if _is_docker_env():
+        candidates.extend(['/usr/bin/chromium', '/usr/bin/chromium-browser'])
+
+    for executable_path in candidates:
+        if executable_path and os.path.isfile(executable_path) and os.access(executable_path, os.X_OK):
+            options['executable_path'] = executable_path
+            break
+    return options
+
+
 async def _start_playwright_safe(cookie_id: str = "default"):
     """安全启动Playwright，兼容Docker环境
     
@@ -9492,8 +9507,7 @@ class XianyuLive:
                 ])
 
             browser = await playwright.chromium.launch(
-                headless=True,  # 移动模式使用无头模式
-                args=browser_args
+                **_playwright_launch_options(headless=True, browser_args=browser_args)
             )
 
             # 创建移动设备浏览器上下文（模拟iPhone）
@@ -14208,8 +14222,7 @@ class XianyuLive:
 
             # 使用无头浏览器
             browser = await playwright.chromium.launch(
-                headless=True,  # 改回无头模式
-                args=browser_args
+                **_playwright_launch_options(headless=True, browser_args=browser_args)
             )
 
             # 创建浏览器上下文
@@ -14599,8 +14612,7 @@ class XianyuLive:
             account_info = db_manager.get_cookie_details(self.cookie_id) or {}
             show_browser = bool(account_info.get('show_browser', False))
             browser = await playwright.chromium.launch(
-                headless=not show_browser,
-                args=browser_args
+                **_playwright_launch_options(headless=not show_browser, browser_args=browser_args)
             )
 
             # 创建浏览器上下文
@@ -14889,8 +14901,7 @@ class XianyuLive:
             account_info = db_manager.get_cookie_details(self.cookie_id) or {}
             show_browser = bool(account_info.get('show_browser', False))
             browser = await playwright.chromium.launch(
-                headless=not show_browser,
-                args=browser_args
+                **_playwright_launch_options(headless=not show_browser, browser_args=browser_args)
             )
 
             # 创建浏览器上下文

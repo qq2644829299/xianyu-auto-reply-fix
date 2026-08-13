@@ -41,6 +41,7 @@ services:
       - ENABLE_HEADFUL=true     # 启用有头模式
       - ENABLE_VNC=true         # 启用 VNC 服务器（可选）
       - DISPLAY=:99             # 虚拟显示编号
+      - PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=${PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:-/usr/bin/chromium}
       
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
       - PYTHONDONTWRITEBYTECODE=${PYTHONDONTWRITEBYTECODE:-1}
