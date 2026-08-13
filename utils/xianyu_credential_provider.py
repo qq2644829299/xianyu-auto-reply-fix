@@ -189,6 +189,23 @@ class XianyuCredentialProvider:
                     account_id=str(account_id), user_id=int(user_id), cookie=cookie,
                     xianyu_user_id=xianyu_user_id, device_id=generate_device_id(xianyu_user_id),
                 )
+            elif current.cookie != cookie and context is None:
+                # 重新扫码得到的是新的 API 登录态，不能复用上一次验证页。
+                # 关闭旧浏览器并只保留新 Cookie 对应的完整上下文。
+                if current.browser:
+                    try:
+                        playwright, browser = current.browser
+                        await browser.close()
+                        await playwright.stop()
+                    except Exception:
+                        pass
+                current.browser = None
+                current.browser_context = None
+                current.verification_page = None
+                current.remote_session_id = None
+                current.remote_control_url = None
+                current.verification_url = None
+                current.device_id = generate_device_id(xianyu_user_id)
             # 验证后的 Cookie 可能由官方页面刷新；只在传入新值时更新，不生成新设备。
             current.cookie = cookie
             current.stage = AcquireStatus.CREDENTIAL_ACQUIRING

@@ -7552,8 +7552,8 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
 @app.get("/account-credential/{account_id}")
 async def get_account_credential_status(account_id: str, current_user: Dict[str, Any] = Depends(get_current_user)):
     """只返回接入阶段，不泄露 Cookie、Token 或验证上下文。"""
-    account = db_manager.get_cookie_by_id(account_id)
-    if not account or account.get('user_id') != current_user.get('user_id'):
+    account = db_manager.get_cookie_details(account_id)
+    if not account or str(account.get('user_id')) != str(current_user.get('user_id')):
         raise HTTPException(status_code=404, detail='账号不存在')
     return {'success': True, **xianyu_credential_provider.status(account_id)}
 
@@ -7561,8 +7561,8 @@ async def get_account_credential_status(account_id: str, current_user: Dict[str,
 @app.post("/account-credential/{account_id}/resume")
 async def resume_account_credential_acquire(account_id: str, current_user: Dict[str, Any] = Depends(get_current_user)):
     """人工完成官方验证后，从原 token 请求继续，不重新登录。"""
-    account = db_manager.get_cookie_by_id(account_id)
-    if not account or account.get('user_id') != current_user.get('user_id'):
+    account = db_manager.get_cookie_details(account_id)
+    if not account or str(account.get('user_id')) != str(current_user.get('user_id')):
         raise HTTPException(status_code=404, detail='账号不存在')
     log_with_user('info', f"[{account_id}] 用户已完成官方验证，恢复业务连接凭证获取", current_user)
     result = await xianyu_credential_provider.resume(account_id)
