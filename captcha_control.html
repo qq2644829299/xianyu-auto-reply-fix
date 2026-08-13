@@ -383,7 +383,9 @@
 
             try {
                 // 建立 WebSocket 连接
-                const wsUrl = `ws://${window.location.host}/api/captcha/ws/${sessionId}`;
+                // HTTPS 页面只能建立加密 WebSocket；本地 HTTP 仍使用 ws，线上 HTTPS 使用 wss。
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${wsProtocol}//${window.location.host}/api/captcha/ws/${sessionId}`;
                 log(`WebSocket URL: ${wsUrl}`, 'info');
                 
                 ws = new WebSocket(wsUrl);
@@ -568,4 +570,3 @@
     </script>
 </body>
 </html>
-
