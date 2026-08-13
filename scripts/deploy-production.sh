@@ -141,7 +141,7 @@ REMOTE
 fi
 
 info "Packing source only"
-tar -C "$ROOT" --exclude=.git --exclude=.env --exclude=data --exclude=logs --exclude=backups --exclude=trajectory_history --exclude=update_backup --exclude='*.log' --exclude=static/uploads --exclude='*.pyc' --exclude='__pycache__' -czf "$archive" .
+tar -C "$ROOT" --exclude=.git --exclude=.env --exclude=data --exclude=logs --exclude=backups --exclude=browser_data --exclude=trajectory_history --exclude=update_backup --exclude='*.log' --exclude=static/uploads --exclude='*.pyc' --exclude='__pycache__' -czf "$archive" .
 if [[ "$DRY_RUN" == 1 ]]; then info "Would publish $archive as $release_id"; exit 0; fi
 
 remote_archive="/tmp/fishcloud-source-$release_id.tar.gz"
@@ -156,7 +156,7 @@ cleanup() { sudo rm -f "$archive"; }
 trap cleanup EXIT
 [[ -f "$archive" ]] || { echo "Source archive missing" >&2; exit 1; }
 sudo mkdir -p "$backup"
-sudo tar -C "$root" --exclude=.env --exclude=data --exclude=logs --exclude=backups --exclude=trajectory_history --exclude=update_backup --exclude='*.log' --exclude=static/uploads -czf "$backup/source.tar.gz" .
+sudo tar -C "$root" --exclude=.env --exclude=data --exclude=logs --exclude=backups --exclude=browser_data --exclude=trajectory_history --exclude=update_backup --exclude='*.log' --exclude=static/uploads -czf "$backup/source.tar.gz" .
 sudo tar -xzf "$archive" --no-same-owner --no-same-permissions -C "$root"
 cd "$root"
 sudo docker compose -f "$compose" up -d --build --remove-orphans
