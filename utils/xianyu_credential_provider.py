@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+import shutil
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -115,9 +116,12 @@ class XianyuCredentialProvider:
         from utils.captcha_remote_control import captcha_controller
 
         playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(
-            headless=True, args=['--no-sandbox', '--disable-dev-shm-usage']
-        )
+        launch_options = {'headless': True, 'args': ['--no-sandbox', '--disable-dev-shm-usage']}
+        # 生产镜像安装的是系统 Chromium，而非 Playwright 下载的浏览器包。
+        system_chromium = shutil.which('chromium') or shutil.which('chromium-browser')
+        if system_chromium:
+            launch_options['executable_path'] = system_chromium
+        browser = await playwright.chromium.launch(**launch_options)
         browser_context = await browser.new_context(
             viewport={'width': 1280, 'height': 760},
             user_agent=(
