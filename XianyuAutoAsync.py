@@ -337,7 +337,7 @@ class XianyuLive:
             cls._auth_prewarmed_tokens.pop(cookie_id, None)
 
     @classmethod
-    def cache_auth_prewarmed_token(cls, cookie_id: str, token: str, source: str = 'generic_auth'):
+    def cache_auth_prewarmed_token(cls, cookie_id: str, token: str, source: str = 'generic_auth', device_id: str = None):
         """缓存预检成功后的 token，供新实例首轮初始化复用。"""
         if not cookie_id or not token:
             return
@@ -346,6 +346,7 @@ class XianyuLive:
             'token': token,
             'timestamp': time.time(),
             'source': source,
+            'device_id': str(device_id or '').strip() or None,
         }
 
     @classmethod
@@ -2025,6 +2026,11 @@ class XianyuLive:
         prewarmed_token_info = self.pop_auth_prewarmed_token(self.cookie_id)
         if prewarmed_token_info:
             self.current_token = prewarmed_token_info.get('token')
+            # accessToken 是在同一 deviceId 下取得的；新实例必须复用它，
+            # 否则 Cookie 登录成功但 WebSocket /reg 会落在另一条设备会话上。
+            prewarmed_device_id = str(prewarmed_token_info.get('device_id') or '').strip()
+            if prewarmed_device_id:
+                self.device_id = prewarmed_device_id
             self.last_token_refresh_time = prewarmed_token_info.get('timestamp', time.time())
             logger.info(
                 f"【{cookie_id}】已复用认证预热token，来源: {prewarmed_token_info.get('source') or 'unknown'}"

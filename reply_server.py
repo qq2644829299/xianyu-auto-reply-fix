@@ -7384,7 +7384,7 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     db_manager.update_cookie_account_info(account_id, cookie_value=final_cookies)
                     XianyuLive.cache_auth_prewarmed_token(
                         account_id, acquire_result.credential.access_token,
-                        source='credential_provider',
+                        source='credential_provider', device_id=acquire_result.credential.device_id,
                     )
                     log_with_user('info', f"[{account_id}] 已获得完整业务连接凭证，开始建立业务连接", current_user)
 
@@ -7564,7 +7564,7 @@ async def resume_account_credential_acquire(account_id: str, current_user: Dict[
         return {'success': False, 'status': result.status.value, 'message': result.message}
     from XianyuAutoAsync import XianyuLive
     db_manager.update_cookie_account_info(account_id, cookie_value=result.credential.cookie)
-    XianyuLive.cache_auth_prewarmed_token(account_id, result.credential.access_token, source='credential_resume')
+    XianyuLive.cache_auth_prewarmed_token(account_id, result.credential.access_token, source='credential_resume', device_id=result.credential.device_id)
     if not cookie_manager.manager:
         return {'success': False, 'status': AcquireStatus.CREDENTIAL_READY.value, 'message': '凭证已取得，任务管理器尚未启动'}
     cookie_manager.manager.update_cookie(account_id, result.credential.cookie, save_to_db=False)
@@ -7607,7 +7607,7 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
         cookies = acquire_result.credential.cookie
         db_manager.update_cookie_account_info(account_id, cookie_value=cookies)
         from XianyuAutoAsync import XianyuLive
-        XianyuLive.cache_auth_prewarmed_token(account_id, acquire_result.credential.access_token, source='credential_provider_fallback')
+        XianyuLive.cache_auth_prewarmed_token(account_id, acquire_result.credential.access_token, source='credential_provider_fallback', device_id=acquire_result.credential.device_id)
 
         # 添加到或更新cookie_manager
         if cookie_manager.manager:
