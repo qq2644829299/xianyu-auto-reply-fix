@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 
 from utils.xianyu_utils import generate_device_id, trans_cookies
 from utils.xianyu_slider_stealth import probe_cookie_verification_from_cookie
+from loguru import logger
 
 
 class AcquireStatus(str, Enum):
@@ -130,13 +131,9 @@ class XianyuCredentialProvider:
                 '(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
             ),
         )
-        # verification_url is issued by the login-token request and can redirect
-        # between goofish / taobao verification hosts.  The old code injected the
-        # fresh session only for .goofish.com, leaving the verification page in a
-        # new browser without the very cookies which created the one-time QR.
-        # Keep the browser context coherent across the official Alibaba domains;
-        # this is only session preservation for a user-completed verification,
-        # never an attempt to solve or bypass it.
+        # 验证地址可能跳转到 goofish、淘宝等官方域名。必须把当前会话 Cookie
+        # 放进验证页实际使用的官方域名，否则用户在页面完成验证，恢复链路仍然
+        # 拿不到同一个会话的结果。
         parsed_url = urlparse(context.verification_url)
         target_host = (parsed_url.hostname or '').lower()
         cookie_domains = {'.goofish.com', '.taobao.com', '.tmall.com', '.alibaba.com'}
@@ -154,11 +151,9 @@ class XianyuCredentialProvider:
             await browser_context.add_cookies(cookies)
         page = await browser_context.new_page()
         try:
-            logger.info('Opening official verification page for account {} on host {}', context.account_id, target_host or 'unknown')
+            logger.info('打开官方验证页: account={}, host={}', context.account_id, target_host or 'unknown')
             await page.goto(context.verification_url, wait_until='domcontentloaded', timeout=30000)
-            # Wait for the official page to finish its redirect/render cycle
-            # before exposing it to the human operator.  Capturing an earlier
-            # intermediate page produces a QR that the phone later calls stale.
+            # 等待官方页面完成跳转与渲染，再交给用户操作，避免二维码过早截取而失效。
             await page.wait_for_timeout(2500)
             session_id = f'credential-{context.account_id}-{uuid.uuid4().hex[:12]}'
             await captcha_controller.create_session(session_id, page)
