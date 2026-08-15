@@ -11,7 +11,9 @@ services:
         http_proxy: ${HTTP_PROXY}
         https_proxy: ${HTTPS_PROXY}
         no_proxy: ${NO_PROXY}
-    image: ghcr.io/gudong2003/xianyu-auto-reply-fix:latest
+    # 线上由此目录本地构建并挂载源码；不要在普通重建时拉取上游镜像，
+    # 否则会覆盖当前部署分支的运行镜像并延长恢复时间。
+    image: xianyu-auto-reply-fix:latest
     container_name: xianyu-auto-reply-fix
     restart: unless-stopped
     # 内置 init 进程回收僵尸进程（chrome 子进程退出后无人 reap 会变 defunct，长期累积）

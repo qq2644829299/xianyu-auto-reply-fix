@@ -123,7 +123,12 @@ class XianyuCredentialProvider:
         # noVNC；此前这里固定 headless=True，即使用户手工操作，也可能落入
         # 官方页面的无头降级/错误页，且无法切换到真正实时的同一会话。
         # 本地未启用有头模式时仍保持无头，避免给开发环境增加显示依赖。
-        headful_enabled = os.environ.get('ENABLE_HEADFUL', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+        headful_requested = os.environ.get('ENABLE_HEADFUL', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+        # 旧运行镜像可能尚未包含 Xvfb。不能仅凭环境变量启动有头浏览器，
+        # 否则 Playwright 会在没有 X Server 时直接终止，反而让人工验证不可用。
+        headful_enabled = headful_requested and bool(shutil.which('Xvfb') or shutil.which('Xorg'))
+        if headful_requested and not headful_enabled:
+            logger.warning('已请求有头人工验证，但运行镜像缺少 X Server；本次安全回退为无头会话')
         launch_options = {
             'headless': not headful_enabled,
             'args': [
