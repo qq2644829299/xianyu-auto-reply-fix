@@ -134,6 +134,45 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         except Exception:
             pass
     captcha_controller.websocket_connections[session_id] = websocket
+    completion_task = None
+    completion_attempt = 0
+
+    async def watch_verification_result(attempt: int):
+        """在后台观察官方验证结果，绝不能阻塞下一次人工拖动事件。"""
+        try:
+            completed = False
+            for _ in range(5):
+                await asyncio.sleep(1.0)
+                if attempt != completion_attempt:
+                    return
+                completed = await captcha_controller.check_completion(session_id)
+                if completed:
+                    await asyncio.sleep(0.4)
+                    if attempt != completion_attempt:
+                        return
+                    completed = await captcha_controller.check_completion(session_id)
+                    break
+
+            if attempt != completion_attempt or captcha_controller.websocket_connections.get(session_id) is not websocket:
+                return
+            if completed:
+                await websocket.send_json({
+                    'type': 'completed',
+                    'message': '验证成功！'
+                })
+                logger.success(f"✅ 验证完成: {session_id}")
+            else:
+                # 只在本次仍是最新的一次释放时回传截图，避免旧检查覆盖新拖动。
+                snapshot = await captcha_controller.update_screenshot(session_id)
+                if attempt == completion_attempt and snapshot:
+                    await websocket.send_json({
+                        'type': 'screenshot_update',
+                        **snapshot,
+                    })
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"验证结果观察失败: {session_id}: {exc}")
     
     try:
         # 发送初始会话信息
@@ -178,34 +217,24 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 )
                 
                 if success:
+                    # 这是输入已进入服务端转发队列的确认，不代表官方验证码结果。
+                    # 让前端在拖动时给出明确反馈，而无需对每个 move 截图。
+                    if event_type != 'move':
+                        await websocket.send_json({
+                            'type': 'input_ack',
+                            'event_type': event_type,
+                        })
                     # 只在鼠标释放后才检查完成状态
                     if event_type == 'up':
-                        # 官方验证成功后的页面切换并不总在 1 秒内完成。持续观察一小段
-                        # 时间，避免人工已通过却被本地过早判定为“仍有滑块”。
-                        completed = False
-                        for _ in range(5):
-                            await asyncio.sleep(1.0)
-                            completed = await captcha_controller.check_completion(session_id)
-                            if completed:
-                                await asyncio.sleep(0.4)
-                                completed = await captcha_controller.check_completion(session_id)
-                                break
-                        
-                        if completed:
-                            await websocket.send_json({
-                                'type': 'completed',
-                                'message': '验证成功！'
-                            })
-                            logger.success(f"✅ 验证完成: {session_id}")
-                            break
-                        else:
-                            # 更新截图显示验证结果
-                            snapshot = await captcha_controller.update_screenshot(session_id)
-                            if snapshot:
-                                await websocket.send_json({
-                                    'type': 'screenshot_update',
-                                    **snapshot,
-                                })
+                        # 结果观察与截图都可能耗时数秒；不能卡住 receive_json，
+                        # 否则用户下一次拖动会积压，闲鱼收到的就不是实时轨迹。
+                        completion_attempt += 1
+                        if completion_task and not completion_task.done():
+                            completion_task.cancel()
+                        completion_task = asyncio.create_task(
+                            watch_verification_result(completion_attempt),
+                            name=f'captcha-completion-{session_id}',
+                        )
                     else:
                         # 拖动时不截屏。截屏会阻塞后续 move 事件、重绘前端画面，
                         # 使鼠标轨迹被打断，人工滑块永远无法形成连续手势。
@@ -235,6 +264,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         logger.error(traceback.format_exc())
     
     finally:
+        if completion_task and not completion_task.done():
+            completion_task.cancel()
         # 清理
         if captcha_controller.websocket_connections.get(session_id) is websocket:
             del captcha_controller.websocket_connections[session_id]

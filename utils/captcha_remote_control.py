@@ -53,6 +53,11 @@ class CaptchaRemoteController:
             'captcha_info': captcha_info,
             'capture': capture,
             'input_lock': asyncio.Lock(),
+            # 高频 pointermove 不能逐条 await Playwright。网络稍有抖动时，旧
+            # move 会排在 mouseup 前面，官方页面收到的是一条滞后的轨迹。只保留
+            # 尚未转发的最后一个位置，down/up 仍严格按顺序转发。
+            'pending_move': None,
+            'move_worker': None,
             'completed': False,
             'viewport': viewport
         }
@@ -226,14 +231,85 @@ class CaptchaRemoteController:
             return False
         
         try:
-            page = self.active_sessions[session_id]['page']
-            input_lock = self.active_sessions[session_id].setdefault('input_lock', asyncio.Lock())
+            session = self.active_sessions[session_id]
+
+            if event_type == 'move':
+                # move 是可合并事件：调用方无需等待浏览器完成这一步，下一条 move
+                # 会覆盖尚未消费的位置。这样 WebSocket 接收循环可以持续读取用户
+                # 的拖动，且不会把 mouseup 堵在过期的 move 队列后面。
+                self._queue_mouse_move(session_id, x, y)
+                return True
+
+            # 释放前先将最后一个位置送达。这里是有意等待的，以保证官方页面实际
+            # 收到 down -> move* -> up 的正确顺序。不能在 down 前 flush：那会把
+            # 极端网络抖动遗留的上一次 move 放到新一轮按下之前。
+            if event_type == 'up':
+                await self._flush_pending_moves(session_id)
+            elif event_type == 'down':
+                session['pending_move'] = None
+            page = session['page']
+            input_lock = session.setdefault('input_lock', asyncio.Lock())
             async with input_lock:
                 return await self._handle_mouse_event_locked(page, event_type, x, y)
 
         except Exception as e:
             logger.error(f"处理鼠标事件失败: {e}")
             return False
+
+    def _queue_mouse_move(self, session_id: str, x: int, y: int) -> None:
+        """合并尚未发送的 move，并在后台顺序转发最新位置。"""
+        session = self.active_sessions.get(session_id)
+        if not session:
+            return
+
+        session['pending_move'] = (x, y)
+        worker = session.get('move_worker')
+        if worker is None or worker.done():
+            session['move_worker'] = asyncio.create_task(
+                self._drain_pending_moves(session_id),
+                name=f'captcha-move-{session_id}',
+            )
+
+    async def _flush_pending_moves(self, session_id: str) -> None:
+        """等待已接收的最新 move 送达，供 down/up 保证事件顺序。"""
+        session = self.active_sessions.get(session_id)
+        if not session:
+            return
+        worker = session.get('move_worker')
+        if worker and not worker.done():
+            await worker
+
+        # worker 退出到本次调用之间可能又收到一个 move；补启一次并等待，避免
+        # mouseup 早于最后位置抵达官方页面。
+        if session.get('pending_move') is not None:
+            self._queue_mouse_move(session_id, *session['pending_move'])
+            worker = session.get('move_worker')
+            if worker:
+                await worker
+
+    async def _drain_pending_moves(self, session_id: str) -> None:
+        """串行发送合并后的 move，永不在截图流程中等待。"""
+        try:
+            while True:
+                session = self.active_sessions.get(session_id)
+                if not session:
+                    return
+                position = session.get('pending_move')
+                if position is None:
+                    return
+                session['pending_move'] = None
+
+                page = session['page']
+                input_lock = session.setdefault('input_lock', asyncio.Lock())
+                async with input_lock:
+                    await page.mouse.move(*position)
+
+                # 让出一个调度周期，将紧接着到达的 pointermove 合并为最新点。
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(f"转发合并鼠标移动失败: {exc}")
 
     async def _handle_mouse_event_locked(self, page: Page, event_type: str, x: int, y: int) -> bool:
         """在单会话输入锁内转发事件，防止双 WebSocket 交错操作同一个页面。"""
@@ -355,6 +431,9 @@ class CaptchaRemoteController:
     async def close_session(self, session_id: str):
         """关闭会话"""
         if session_id in self.active_sessions:
+            worker = self.active_sessions[session_id].get('move_worker')
+            if worker and not worker.done():
+                worker.cancel()
             del self.active_sessions[session_id]
             logger.info(f"🔒 关闭远程控制会话: {session_id}")
     

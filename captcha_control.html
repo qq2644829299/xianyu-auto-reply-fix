@@ -109,6 +109,33 @@
             cursor: crosshair;
         }
 
+        .drag-feedback {
+            position: absolute;
+            left: 12px;
+            right: 12px;
+            bottom: 12px;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            background: rgba(17, 24, 39, .82);
+            color: #fff;
+            font-size: 13px;
+            pointer-events: none;
+        }
+
+        .drag-feedback.active { display: flex; }
+
+        .drag-feedback-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #60a5fa;
+            box-shadow: 0 0 0 4px rgba(96, 165, 250, .22);
+            animation: pulse 1s infinite;
+        }
+
         .loading {
             position: absolute;
             top: 50%;
@@ -292,6 +319,10 @@
                 <p>加载中...</p>
             </div>
             <canvas id="captchaCanvas"></canvas>
+            <div id="dragFeedback" class="drag-feedback" aria-live="polite">
+                <span class="drag-feedback-dot"></span>
+                <span id="dragFeedbackText">正在转发拖动到验证页面…</span>
+            </div>
         </div>
 
         <div class="log" id="log">
@@ -457,6 +488,13 @@
                 }, 500);
             }
 
+            else if (type === 'input_ack') {
+                // 只表明事件已被服务器接收/排队，不将其伪装成验证码通过。
+                if (data.event_type === 'down' && isMouseDown) {
+                    setDragFeedback('远程验证页已开始接收拖动，继续平稳拖动…');
+                }
+            }
+
             else if (type === 'error') {
                 log(`错误: ${data.message}`, 'error');
             }
@@ -507,6 +545,7 @@
 
             event.preventDefault();
             isMouseDown = true;
+            setDragFeedback('正在转发拖动到验证页面…');
             canvas.setPointerCapture?.(event.pointerId);
             const coords = getMouseCoords(event);
             
@@ -550,6 +589,7 @@
 
             event.preventDefault();
             isMouseDown = false;
+            hideDragFeedback();
             if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
             const coords = getMouseCoords(event);
             
@@ -582,6 +622,16 @@
                 x: canvasX + captureOrigin.x,
                 y: canvasY + captureOrigin.y
             };
+        }
+
+        function setDragFeedback(message) {
+            const feedback = document.getElementById('dragFeedback');
+            document.getElementById('dragFeedbackText').textContent = message;
+            feedback.classList.add('active');
+        }
+
+        function hideDragFeedback() {
+            document.getElementById('dragFeedback').classList.remove('active');
         }
     </script>
 </body>
