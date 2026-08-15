@@ -57,6 +57,7 @@ class LoginContext:
     verification_url: Optional[str] = None
     remote_session_id: Optional[str] = None
     remote_control_url: Optional[str] = None
+    verification_message: Optional[str] = None
     browser: Any = field(default=None, repr=False, compare=False)
     browser_context: Any = field(default=None, repr=False, compare=False)
     verification_page: Any = field(default=None, repr=False, compare=False)
@@ -90,6 +91,7 @@ class XianyuCredentialProvider:
             "status": context.stage.value,
             "verification_url": context.verification_url,
             "remote_control_url": context.remote_control_url,
+            "verification_message": context.verification_message,
             "updated_at": context.updated_at,
         }
 
@@ -105,18 +107,51 @@ class XianyuCredentialProvider:
         context.device_id = str(device_id or context.device_id)
         context.stage = AcquireStatus.VERIFY_REQUIRED
         context.verification_url = str(verification_url or "") or None
+        context.verification_message = None
         context.updated_at = time.time()
         self._contexts[str(account_id)] = context
         return context
 
+    async def _close_official_verification(self, context: LoginContext, *, preserve_cookie: bool = True) -> None:
+        """关闭一次人工验证浏览器，同时保留它在同一上下文中刷新的 Cookie。"""
+        if preserve_cookie:
+            await self._collect_official_verification_cookies(context)
+        if context.remote_session_id:
+            try:
+                from utils.captcha_remote_control import captcha_controller
+                await captcha_controller.close_session(context.remote_session_id)
+            except Exception:
+                pass
+        if context.browser:
+            try:
+                playwright, browser = context.browser
+                await browser.close()
+                await playwright.stop()
+            except Exception:
+                pass
+        context.browser = None
+        context.browser_context = None
+        context.verification_page = None
+        context.remote_session_id = None
+        context.remote_control_url = None
+
     async def start_official_verification(self, context: LoginContext) -> LoginContext:
         """在服务器保留原 Cookie 的浏览器中打开官方页，供用户手工操作。"""
-        if context.remote_control_url and context.verification_page:
-            return context
         if not context.verification_url:
             return context
         from playwright.async_api import async_playwright
         from utils.captcha_remote_control import captcha_controller
+
+        # 同一真实滑块会话保持不动；只有该会话已完成、已关闭，或上轮是
+        # 官方错误页时，才收集已有 Cookie 后重新建立。绝不能一边保留旧页
+        # 一边新建浏览器，二者会变成不同会话。
+        if context.remote_session_id and context.remote_control_url and context.verification_page:
+            if captcha_controller.session_exists(context.remote_session_id) and not captcha_controller.is_completed(context.remote_session_id):
+                return context
+        if context.browser:
+            await self._close_official_verification(context, preserve_cookie=True)
+
+        context.verification_message = None
 
         playwright = await async_playwright().start()
         # 人工官方验证应使用可见的 Chromium 会话。生产容器已配好 Xvfb +
@@ -179,7 +214,7 @@ class XianyuCredentialProvider:
             # 等待官方页面完成跳转与渲染，再交给用户操作，避免二维码过早截取而失效。
             await page.wait_for_timeout(2500)
             session_id = f'credential-{context.account_id}-{uuid.uuid4().hex[:12]}'
-            await captcha_controller.create_session(session_id, page)
+            session = await captcha_controller.create_session(session_id, page)
         except Exception:
             await browser.close()
             await playwright.stop()
@@ -187,8 +222,18 @@ class XianyuCredentialProvider:
         context.browser = (playwright, browser)
         context.browser_context = browser_context
         context.verification_page = page
-        context.remote_session_id = session_id
-        context.remote_control_url = f'/api/captcha/control/{session_id}'
+        # 没有真实滑块时不开放截图鼠标转发页，也不允许把外部 URL 当作
+        # 同一会话的验证入口。此时用户重新发起验证即可获得新的官方会话。
+        if session:
+            context.remote_session_id = session_id
+            context.remote_control_url = f'/api/captcha/control/{session_id}'
+        else:
+            context.remote_session_id = None
+            context.remote_control_url = None
+            # 页面不是可操作滑块时不能留一个无人能操作的浏览器进程；先收集
+            # 它可能刚刷新过的 Cookie，再关闭，下一次恢复会创建全新官方页。
+            await self._close_official_verification(context, preserve_cookie=True)
+            context.verification_message = '官方验证页未出现可操作的滑块（可能已失效或为错误页），请重新发起验证。'
         context.updated_at = time.time()
         return context
 
@@ -245,6 +290,7 @@ class XianyuCredentialProvider:
                 current.remote_session_id = None
                 current.remote_control_url = None
                 current.verification_url = None
+                current.verification_message = None
                 current.device_id = generate_device_id(xianyu_user_id)
             # 验证后的 Cookie 可能由官方页面刷新；只在传入新值时更新，不生成新设备。
             current.cookie = cookie
@@ -275,6 +321,7 @@ class XianyuCredentialProvider:
             # 关键：Cookie、UNB、deviceId、当前阶段全部保留，仅暂停请求链。
             current.stage = AcquireStatus.VERIFY_REQUIRED
             current.verification_url = str(probe.get("verification_url") or "") or None
+            current.verification_message = None
             current.updated_at = time.time()
             return AcquireResult(
                 AcquireStatus.VERIFY_REQUIRED, context=current,
@@ -294,6 +341,7 @@ class XianyuCredentialProvider:
             if self.validate_credential(credential):
                 current.stage = AcquireStatus.CREDENTIAL_READY
                 current.verification_url = None
+                current.verification_message = None
                 current.updated_at = time.time()
                 return AcquireResult(AcquireStatus.CREDENTIAL_READY, credential, current,
                                      "已获得 IM WebSocket 初始化所需凭证")
@@ -312,8 +360,13 @@ class XianyuCredentialProvider:
         context.updated_at = time.time()
         await self._collect_official_verification_cookies(context)
         # 不调用 login；从被安全验证打断的 token 请求恢复。
-        return await self.acquire(account_id, context.user_id, cookie or context.cookie,
-                                  proxy=proxy, context=context)
+        result = await self.acquire(account_id, context.user_id, cookie or context.cookie,
+                                    proxy=proxy, context=context)
+        if result.status == AcquireStatus.CREDENTIAL_READY:
+            # Cookie 已在 acquire 前从同一官方浏览器上下文收集；这时才关闭
+            # 验证页，确保后续账号任务使用的就是人工验证后取得的 Cookie。
+            await self._close_official_verification(context, preserve_cookie=False)
+        return result
 
 
 xianyu_credential_provider = XianyuCredentialProvider()

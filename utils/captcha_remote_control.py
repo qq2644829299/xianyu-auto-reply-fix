@@ -5,6 +5,7 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 from typing import Optional, Dict, Any
 from loguru import logger
@@ -18,7 +19,7 @@ class CaptchaRemoteController:
         self.active_sessions: Dict[str, Dict[str, Any]] = {}
         self.websocket_connections: Dict[str, Any] = {}
     
-    async def create_session(self, session_id: str, page: Page) -> Dict[str, str]:
+    async def create_session(self, session_id: str, page: Page) -> Optional[Dict[str, str]]:
         """
         创建远程控制会话
         
@@ -29,9 +30,13 @@ class CaptchaRemoteController:
         Returns:
             包含会话信息的字典
         """
-        # 验证框常在页面打开后延迟渲染。若此处固定为 None，后续整页截图
-        # 会令前端坐标永远失真，即使 #nocaptcha 稍后已出现也无法正确拖动。
+        # 验证框常在页面打开后延迟渲染。这里必须确认存在真正可交互的
+        # 滑块；错误页、已过期页没有滑块时不能创建“整页鼠标转发”会话。
+        # 后者既无法完成官方验证，还会把错误页误报成可操作验证码。
         captcha_info = await self._wait_for_captcha_info(page)
+        if not captcha_info:
+            logger.warning("未检测到真实滑块，不创建远程验证会话: {}", session_id)
+            return None
         
         # 只截取滑块区域，不截取整个页面（性能优化）
         screenshot_bytes, capture = await self._screenshot_captcha_area(page, captcha_info)
@@ -59,6 +64,9 @@ class CaptchaRemoteController:
             'pending_move': None,
             'move_worker': None,
             'completed': False,
+            'completion_candidate': False,
+            'initial_url': str(getattr(page, 'url', '') or ''),
+            'initial_cookie_fingerprint': await self._cookie_fingerprint(page),
             'viewport': viewport
         }
         
@@ -73,14 +81,14 @@ class CaptchaRemoteController:
         }
 
     async def _wait_for_captcha_info(self, page: Page, timeout_seconds: float = 8.0):
-        """等待延迟渲染的验证码容器，避免用全页截图启动人工验证。"""
+        """等待真实滑块容器，绝不回退到整页截图。"""
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while True:
             captcha_info = await self._get_captcha_info(page)
             if captcha_info:
                 return captcha_info
             if asyncio.get_running_loop().time() >= deadline:
-                logger.warning("⚠️ 等待验证码容器超时，将使用整页截图并在下一次刷新时重试")
+                logger.warning("⚠️ 等待真实滑块超时，官方页可能已失效或为错误页")
                 return None
             await asyncio.sleep(0.4)
     
@@ -113,8 +121,9 @@ class CaptchaRemoteController:
                     'css_height': height,
                 }
             else:
-                # 如果没有找到滑块，截取整个页面
-                logger.warning("未找到滑块位置，截取整个页面")
+                # create_session 不会传入 None；保留这个分支仅用于截图刷新时
+                # 的安全降级，前端会明确提示会话已不可操作。
+                logger.warning("未找到滑块位置，验证码会话已不可操作")
                 screenshot_bytes = await page.screenshot(type='jpeg', quality=75, full_page=False)
                 return screenshot_bytes, {'origin_x': 0, 'origin_y': 0}
                 
@@ -126,7 +135,8 @@ class CaptchaRemoteController:
     async def _get_captcha_info(self, page: Page) -> Dict[str, Any]:
         """获取滑块验证码信息（查找整个容器）"""
         try:
-            # 优先查找整个验证码容器（不是按钮）
+            # 优先查找整个验证码容器（不是按钮）。命中容器后还必须确认其中
+            # 有可见的拖动控件，避免通用 [id*=captcha] 命中官方错误页。
             container_selectors = [
                 '#nocaptcha',  # 完整的验证码容器
                 '.nc_1_nocaptcha',
@@ -146,7 +156,7 @@ class CaptchaRemoteController:
                     element = await page.query_selector(selector)
                     if element:
                         box = await element.bounding_box()
-                        if box and box['width'] > 100 and box['height'] > 100:  # 确保找到的是容器
+                        if box and box['width'] > 100 and box['height'] > 100 and await self._has_real_slider_control(page):
                             logger.info(f"✅ 在主页面找到验证码容器: {selector}, 大小: {box['width']}x{box['height']}")
                             return {
                                 'selector': selector,
@@ -169,7 +179,7 @@ class CaptchaRemoteController:
                             element = await frame.query_selector(selector)
                             if element:
                                 box = await element.bounding_box()
-                                if box and box['width'] > 100 and box['height'] > 100:
+                                if box and box['width'] > 100 and box['height'] > 100 and await self._has_real_slider_control(frame):
                                     logger.info(f"✅ 在iframe找到验证码容器: {selector}, 大小: {box['width']}x{box['height']}")
                                     return {
                                         'selector': selector,
@@ -190,6 +200,53 @@ class CaptchaRemoteController:
         except Exception as e:
             logger.error(f"获取滑块信息失败: {e}")
             return None
+
+    async def _has_real_slider_control(self, frame_or_page) -> bool:
+        """确认官方页面确实展示了可拖动滑块，而非只包含验证码文案。"""
+        slider_selectors = [
+            '#nc_1_n1z', '.nc_scale span', '.nc_iconfont.btn_slide',
+            '#scratch-captcha-btn', '.scratch-captcha-slider',
+            '[class*="slider"][role="slider"]', '[class*="slider"] [class*="handle"]',
+            '[class*="slide"] [class*="handle"]', '[data-testid*="slider"]',
+        ]
+        for selector in slider_selectors:
+            try:
+                element = await frame_or_page.query_selector(selector)
+                if element and await element.is_visible():
+                    box = await element.bounding_box()
+                    if box and box['width'] >= 12 and box['height'] >= 12:
+                        return True
+            except Exception:
+                continue
+        return False
+
+    async def _cookie_fingerprint(self, page: Page) -> str:
+        """只存 Cookie 值的摘要，用于验证完成后的正向状态判断，不记录明文。"""
+        try:
+            cookies = await page.context.cookies()
+            material = '\n'.join(
+                f"{item.get('domain', '')}|{item.get('path', '')}|{item.get('name', '')}|{item.get('value', '')}"
+                for item in sorted(cookies, key=lambda value: (value.get('domain', ''), value.get('path', ''), value.get('name', '')))
+            )
+            return hashlib.sha256(material.encode('utf-8')).hexdigest()
+        except Exception:
+            return ''
+
+    @staticmethod
+    def _looks_like_verification_url(url: str) -> bool:
+        lowered = str(url or '').lower()
+        return any(token in lowered for token in ('punish', 'captcha', 'verify', 'baxia', 'nocaptcha', 'security'))
+
+    async def _has_known_verification_error(self, page: Page) -> bool:
+        try:
+            text = (await page.locator('body').inner_text(timeout=1500)).lower()
+        except Exception:
+            return True
+        markers = (
+            "oops", "something's wrong", "error[", "error [", "please refresh",
+            '验证未通过', '验证失败', '二维码已失效', '验证已失效', '请刷新后重试',
+        )
+        return any(marker in text for marker in markers)
     
     async def update_screenshot(self, session_id: str, quality: int = 75) -> Optional[Dict[str, Any]]:
         """刷新截图，并带回该截图在 Playwright 页面中的精确原点。"""
@@ -341,7 +398,13 @@ class CaptchaRemoteController:
             return False
     
     async def check_completion(self, session_id: str) -> bool:
-        """检查验证是否完成（更严格的判断）"""
+        """只在得到官方页面的正向变化时认定人工验证已完成。
+
+        单纯“滑块元素消失”并不代表成功：官方错误页、超时页同样会让
+        ``#nocaptcha`` 消失。完成条件至少包含 Cookie 刷新或离开验证页，且
+        页面不能是已知错误状态；最终是否能恢复连接仍由 credential provider
+        重新请求业务 token 作权威校验。
+        """
         if session_id not in self.active_sessions:
             return False
         
@@ -407,10 +470,28 @@ class CaptchaRemoteController:
                     return False
             except:
                 pass
-            
-            # 所有检查都通过，认为验证完成
-            logger.success(f"✅ 验证完成（所有滑块元素已消失）: {session_id}")
-            self.active_sessions[session_id]['completed'] = True
+
+            if await self._has_known_verification_error(page):
+                logger.info(f"官方验证页仍为错误/失效状态，不认定完成: {session_id}")
+                return False
+
+            session = self.active_sessions[session_id]
+            cookie_changed = bool(session.get('initial_cookie_fingerprint')) and (
+                await self._cookie_fingerprint(page) != session.get('initial_cookie_fingerprint')
+            )
+            left_verification_page = (
+                self._looks_like_verification_url(session.get('initial_url', ''))
+                and not self._looks_like_verification_url(getattr(page, 'url', ''))
+            )
+            if not (cookie_changed or left_verification_page):
+                logger.debug(f"滑块已隐藏但尚无官方成功证据: {session_id}")
+                return False
+
+            # 所有检查都通过，作为“可恢复”候选。resume 会在同一浏览器上下文
+            # 采集 Cookie 并重试 token 请求，避免前端把视觉变化伪装成登录成功。
+            logger.success(f"✅ 官方验证页面已出现成功变化: {session_id}")
+            session['completion_candidate'] = True
+            session['completed'] = True
             return True
             
         except Exception as e:

@@ -7372,6 +7372,7 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                             'credential_status': AcquireStatus.VERIFY_REQUIRED.value,
                             'verification_url': verification_url,
                             'remote_control_url': (acquire_result.context.remote_control_url if acquire_result.context else None),
+                            'verification_message': (acquire_result.context.verification_message if acquire_result.context else None),
                             'task_restarted': False,
                             'warning_message': message,
                         }
@@ -7572,7 +7573,15 @@ async def resume_account_credential_acquire(account_id: str, current_user: Dict[
                 await xianyu_credential_provider.start_official_verification(result.context)
             except Exception as verification_browser_error:
                 log_with_user('warning', f"[{account_id}] 官方验证页面启动失败: {verification_browser_error}", current_user)
-        return {'success': False, 'status': result.status.value, 'message': '官方验证尚未完成，请在闲鱼页面完成后再继续', 'verification_url': result.context.verification_url if result.context else None, 'remote_control_url': result.context.remote_control_url if result.context else None}
+        verification_message = result.context.verification_message if result.context else None
+        return {
+            'success': False,
+            'status': result.status.value,
+            'message': verification_message or '官方验证尚未完成，请在闲鱼页面完成后再继续',
+            'verification_url': result.context.verification_url if result.context else None,
+            'remote_control_url': result.context.remote_control_url if result.context else None,
+            'verification_message': verification_message,
+        }
     if result.status != AcquireStatus.CREDENTIAL_READY or not result.credential:
         return {'success': False, 'status': result.status.value, 'message': result.message}
     from XianyuAutoAsync import XianyuLive
@@ -7616,6 +7625,7 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
                 'cookie_length': len(cookies), 'credential_status': AcquireStatus.VERIFY_REQUIRED.value,
                 'verification_url': acquire_result.context.verification_url if acquire_result.context else None,
                 'remote_control_url': acquire_result.context.remote_control_url if acquire_result.context else None,
+                'verification_message': acquire_result.context.verification_message if acquire_result.context else None,
                 'task_restarted': False,
             }
         if acquire_result.status != AcquireStatus.CREDENTIAL_READY or not acquire_result.credential:

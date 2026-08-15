@@ -15440,7 +15440,8 @@ function showVerificationRequired(data) {
     const screenshotPath = data.screenshot_path || '';
     const verificationUrl = data.verification_url || '';
     const remoteControlUrl = data.remote_control_url || '';
-    const renderKey = `${screenshotPath}|${verificationUrl}|${remoteControlUrl}`;
+    const verificationMessage = data.verification_message || '';
+    const renderKey = `${screenshotPath}|${verificationUrl}|${remoteControlUrl}|${verificationMessage}`;
     if (qrCodeVerificationState.renderKey === renderKey && renderKey) {
     return;
     }
@@ -15498,9 +15499,9 @@ function showVerificationRequired(data) {
         </div>
         </div>
     `;
-    } else if (remoteControlUrl || verificationUrl) {
-    const verificationEntryUrl = remoteControlUrl || verificationUrl;
-    const verificationEntryLabel = remoteControlUrl ? '打开官方验证操作页' : '打开兜底验证页面';
+    } else if (remoteControlUrl) {
+    const verificationEntryUrl = remoteControlUrl;
+    const verificationEntryLabel = '打开官方验证操作页';
     verificationHtml = `
         <div class="text-center">
         <div class="mb-4">
@@ -15509,11 +15510,11 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>${remoteControlUrl ? '已打开服务器原会话，请在该页手工完成官方验证' : '系统正在准备验证二维码，当前先保留一个兜底链接'}</strong>
+            <strong>已打开服务器原会话，请在该页手工完成官方验证</strong>
         </div>
         <div class="mb-4">
-            <p class="text-muted mb-3">${remoteControlUrl ? '请在操作页完成滑块；该页面与服务器保存的登录会话相同。' : '二维码通常会自动出现；如果长时间未出现，可尝试使用兜底入口：'}</p>
-            <a id="openRemoteCaptchaControl" href="${verificationEntryUrl}" target="${remoteControlUrl ? '_self' : '_blank'}" class="btn btn-outline-warning">
+            <p class="text-muted mb-3">请在操作页完成滑块；该页面与服务器保存的登录会话相同。</p>
+            <a id="openRemoteCaptchaControl" href="${verificationEntryUrl}" target="_self" class="btn btn-outline-warning">
             <i class="bi bi-box-arrow-up-right me-2"></i>
             ${verificationEntryLabel}
             </a>
@@ -15524,6 +15525,20 @@ function showVerificationRequired(data) {
             验证完成后回到这里点击“我已完成验证，继续连接”。系统不会重新登录。
             </small>
         </div>
+        </div>
+    `;
+    } else if (verificationUrl || verificationMessage) {
+    // 外部浏览器打开验证 URL 不属于服务器保存的 Playwright 会话；不能把它
+    // 伪装成“兜底入口”，否则用户即使完成验证也无法回收同一会话 Cookie。
+    verificationHtml = `
+        <div class="text-center">
+        <div class="mb-4"><i class="bi bi-exclamation-triangle text-warning" style="font-size: 4rem;"></i></div>
+        <h5 class="text-warning mb-3">本次验证页面不可操作</h5>
+        <div class="alert alert-warning border-0 mb-3">
+            <i class="bi bi-info-circle me-2"></i>
+            <strong>${escapeHtml(verificationMessage || '官方页面没有出现可操作滑块，可能已失效。')}</strong>
+        </div>
+        <p class="text-muted mb-0">请关闭当前验证流程后重新发起账号恢复或扫码登录。为保护会话安全，系统不会在外部浏览器打开该验证链接。</p>
         </div>
     `;
     }
@@ -15577,6 +15592,7 @@ function handleQRCodeSuccess(data) {
     } = data.account_info;
     const credentialStatus = data.account_info.credential_status;
     const verificationUrl = data.account_info.verification_url || '';
+    const verificationMessage = data.account_info.verification_message || '';
 
     // “扫码成功”只是 API 登录成功。业务凭证被安全验证打断时不要关掉
     // 弹窗，也不要说账号已连上；让用户完成闲鱼官方页面后从原链路继续。
@@ -15586,13 +15602,19 @@ function handleQRCodeSuccess(data) {
         qrCodeCheckInterval = null;
         document.getElementById('statusSpinner').style.display = 'none';
         document.getElementById('statusText').textContent = '等待完成闲鱼官方验证';
-        showVerificationRequired({ verification_url: verificationUrl, remote_control_url: data.account_info.remote_control_url || '' });
+        showVerificationRequired({
+            verification_url: verificationUrl,
+            remote_control_url: data.account_info.remote_control_url || '',
+            verification_message: verificationMessage,
+        });
         const container = document.getElementById('verificationContainer');
         if (container && account_id && !document.getElementById('resumeCredentialAcquireButton')) {
+            const needsNewVerification = Boolean(verificationMessage && !data.account_info.remote_control_url);
+            const readyLabel = needsNewVerification ? '重新发起验证' : '我已完成验证，继续连接';
             const button = document.createElement('button');
             button.id = 'resumeCredentialAcquireButton';
             button.className = 'btn btn-primary mt-2';
-            button.innerHTML = '<i class="bi bi-arrow-repeat me-2"></i>我已完成验证，继续连接';
+            button.innerHTML = `<i class="bi bi-arrow-repeat me-2"></i>${readyLabel}`;
             button.onclick = async () => {
                 button.disabled = true;
                 button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>正在继续获取凭证…';
@@ -15607,12 +15629,12 @@ function handleQRCodeSuccess(data) {
                         closeQRCodeLoginModal(1800);
                     } else {
                         button.disabled = false;
-                        button.innerHTML = '<i class="bi bi-arrow-repeat me-2"></i>我已完成验证，继续连接';
+                        button.innerHTML = `<i class="bi bi-arrow-repeat me-2"></i>${readyLabel}`;
                         showToast(result.message || '验证尚未完成', 'warning');
                     }
                 } catch (error) {
                     button.disabled = false;
-                    button.innerHTML = '<i class="bi bi-arrow-repeat me-2"></i>我已完成验证，继续连接';
+                    button.innerHTML = `<i class="bi bi-arrow-repeat me-2"></i>${readyLabel}`;
                     showToast('继续连接失败，请稍后重试', 'danger');
                 }
             };
