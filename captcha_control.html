@@ -103,6 +103,31 @@
             align-items: center;
         }
 
+        .live-control-tip {
+            display: none;
+            margin: 12px 0 0;
+            padding: 11px 13px;
+            border-radius: 8px;
+            background: #eef6ff;
+            border: 1px solid #91caff;
+            color: #0958d9;
+            font-size: 14px;
+            line-height: 1.55;
+        }
+
+        .live-control-tip.active { display: block; }
+
+        .live-control-tip a {
+            display: inline-block;
+            margin-top: 7px;
+            color: #fff;
+            background: #1677ff;
+            border-radius: 5px;
+            padding: 5px 10px;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
         #captchaCanvas {
             max-width: 100%;
             display: block;
@@ -324,6 +349,11 @@
                 <span id="dragFeedbackText">正在转发拖动到验证页面…</span>
             </div>
         </div>
+        <div class="live-control-tip" id="liveControlTip">
+            当前未识别到可操作的滑块区域。这通常表示官方页已失效或降级为错误页；请重新发起验证。
+            <br>需要更高实时性时，请直接打开同一服务器浏览器会话进行人工验证。
+            <br><a id="liveDesktopLink" href="#" target="_blank" rel="noopener">打开实时验证窗口</a>
+        </div>
 
         <div class="log" id="log">
             <div class="log-entry info">等待连接...</div>
@@ -377,6 +407,11 @@
             canvas.addEventListener('pointermove', handleMouseMove);
             canvas.addEventListener('pointerup', handleMouseUp);
             canvas.addEventListener('pointercancel', handleMouseUp);
+
+            const liveDesktopLink = document.getElementById('liveDesktopLink');
+            // noVNC 与当前截图控制页使用同一个服务器 Chromium 会话。它是实时
+            // 视频流，不经过逐帧截图/坐标转发，适合连续人工拖动的官方滑块。
+            liveDesktopLink.href = `http://${window.location.hostname}:6080/vnc.html?autoconnect=1&resize=scale`;
         });
 
         function log(message, type = 'info') {
@@ -501,6 +536,7 @@
         }
 
         function updateCaptureOrigin(capture, captchaInfo) {
+            document.getElementById('liveControlTip').classList.toggle('active', !captchaInfo);
             if (capture && Number.isFinite(Number(capture.origin_x)) && Number.isFinite(Number(capture.origin_y))) {
                 captureOrigin.x = Number(capture.origin_x);
                 captureOrigin.y = Number(capture.origin_y);

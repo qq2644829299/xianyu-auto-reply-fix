@@ -7,6 +7,7 @@ token 请求作为单独阶段处理；出现官方安全校验时只保存上�
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import uuid
 import shutil
@@ -118,7 +119,19 @@ class XianyuCredentialProvider:
         from utils.captcha_remote_control import captcha_controller
 
         playwright = await async_playwright().start()
-        launch_options = {'headless': True, 'args': ['--no-sandbox', '--disable-dev-shm-usage']}
+        # 人工官方验证应使用可见的 Chromium 会话。生产容器已配好 Xvfb +
+        # noVNC；此前这里固定 headless=True，即使用户手工操作，也可能落入
+        # 官方页面的无头降级/错误页，且无法切换到真正实时的同一会话。
+        # 本地未启用有头模式时仍保持无头，避免给开发环境增加显示依赖。
+        headful_enabled = os.environ.get('ENABLE_HEADFUL', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+        launch_options = {
+            'headless': not headful_enabled,
+            'args': [
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--window-size=1280,760',
+            ],
+        }
         # 生产镜像安装的是系统 Chromium，而非 Playwright 下载的浏览器包。
         system_chromium = shutil.which('chromium') or shutil.which('chromium-browser')
         if system_chromium:
@@ -151,7 +164,12 @@ class XianyuCredentialProvider:
             await browser_context.add_cookies(cookies)
         page = await browser_context.new_page()
         try:
-            logger.info('打开官方验证页: account={}, host={}', context.account_id, target_host or 'unknown')
+            logger.info(
+                '打开官方验证页: account={}, host={}, mode={}',
+                context.account_id,
+                target_host or 'unknown',
+                'headful' if headful_enabled else 'headless',
+            )
             await page.goto(context.verification_url, wait_until='domcontentloaded', timeout=30000)
             # 等待官方页面完成跳转与渲染，再交给用户操作，避免二维码过早截取而失效。
             await page.wait_for_timeout(2500)
