@@ -1216,9 +1216,7 @@ class DrissionHandler:
                             try:
                                 # 使用正确的方式获取监听到的请求
                                 packet_count = 0
-                                # 没有新的网络包时必须及时退回到浏览器 Cookie。
-                                # steps() 默认会无限等待，滑块明明已经通过也会卡死在这里。
-                                for packet in self.page.listen.steps(count=10, timeout=3):
+                                for packet in self.page.listen.steps(count=10):  # 最多检查10个数据包
                                     packet_count += 1
                                     if 'slide' in packet.url:
                                         # 获取响应头

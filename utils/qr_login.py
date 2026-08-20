@@ -286,9 +286,7 @@ class QRLoginManager:
             chromium_path = os.getenv('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', '').strip()
             if chromium_path and os.path.exists(chromium_path):
                 launch_options['executable_path'] = chromium_path
-            browser = await playwright.chromium.launch(
-                **launch_options
-            )
+            browser = await playwright.chromium.launch(**launch_options)
             context = await browser.new_context(
                 viewport={'width': 540, 'height': 960},
                 locale='zh-CN',

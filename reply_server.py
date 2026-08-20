@@ -5526,7 +5526,6 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
     auth_recovery_owner = f"manual_password_login:{session_id}"
     auth_recovery_acquired = False
     login_thread_started = False
-    slider_instance = None
     manual_refresh_preflight_timeout = 45.0
     request_loop = asyncio.get_running_loop()
     try:
@@ -5566,19 +5565,28 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 _update_session_risk_log(session_id, 'failed', error_message='账号正在执行手动刷新')
                 log_with_user('warning', f"账号已存在手动刷新任务，拒绝重复触发: {account_id}", current_user)
                 return
-
-        _set_password_login_session_status(
-            session_id,
-            'processing',
-            phase='waiting_slot',
-            progress_message='正在排队准备安全登录环境…',
-        )
         
         # 导入 XianyuSliderStealth
         from utils.xianyu_slider_stealth import XianyuSliderStealth
         import base64
         import io
         
+        # 创建 XianyuSliderStealth 实例
+        existing_cookie_info = db_manager.get_cookie_details(account_id) or {}
+        proxy_config = db_manager.get_cookie_proxy_config(account_id)
+        slider_instance = XianyuSliderStealth(
+            user_id=account_id,
+            enable_learning=True,
+            headless=not show_browser,
+            initial_cookies=existing_cookie_info.get('value', ''),
+            proxy=proxy_config,
+        )
+        slider_instance.risk_session_id = password_login_sessions.get(session_id, {}).get('risk_session_id') or session_id
+        slider_instance.risk_trigger_scene = 'manual_password_refresh' if is_refresh_mode else 'password_login'
+
+        # 更新会话信息
+        password_login_sessions[session_id]['slider_instance'] = slider_instance
+
         # 定义通知回调函数，用于检测到验证时返回验证链接或截图（同步函数）
         def notification_callback(
             message: str,
@@ -5620,11 +5628,6 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                         verification_url=None,
                         qr_code_url=None,
                         verification_type=verification_type_label,
-                        phase='waiting_verification',
-                        progress_message=(
-                            '请使用闲鱼 App 扫描二维码完成验证'
-                            if verification_type == 'qr_verify' else '请在闲鱼 App 完成身份验证'
-                        ),
                     )
                     log_with_user('info', f"账号验证截图已保存: {session_id}, 路径: {actual_screenshot_path}", current_user)
                     
@@ -5672,8 +5675,6 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                         screenshot_path=None,
                         qr_code_url=None,
                         verification_type=verification_type_label,
-                        phase='waiting_verification',
-                        progress_message='请在闲鱼 App 完成身份验证',
                     )
                     log_with_user('info', f"账号验证链接已保存: {session_id}, URL: {verification_url}", current_user)
                     
@@ -5718,47 +5719,16 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
         import threading
 
         def run_login():
-            nonlocal slider_instance
             import asyncio  # 在函数开头导入，避免后续局部import导致UnboundLocalError
             from db_manager import db_manager  # 在函数开头导入，避免作用域问题
             from XianyuAutoAsync import XianyuLive
             try:
-                _set_password_login_session_status(
-                    session_id,
-                    'processing',
-                    phase='starting_browser',
-                    progress_message='正在启动安全登录环境…',
-                )
-                # 构造器会等待并发槽位，最长可达一分钟；只能在后台线程运行，
-                # 否则会阻塞 FastAPI 事件循环，令前端无法轮询到进度。
-                existing_cookie_info = db_manager.get_cookie_details(account_id) or {}
-                proxy_config = db_manager.get_cookie_proxy_config(account_id)
-                slider_instance = XianyuSliderStealth(
-                    user_id=account_id,
-                    enable_learning=True,
-                    headless=True,
-                    initial_cookies=existing_cookie_info.get('value', ''),
-                    proxy=proxy_config,
-                )
-                slider_instance.risk_session_id = password_login_sessions.get(session_id, {}).get('risk_session_id') or session_id
-                slider_instance.risk_trigger_scene = 'manual_password_refresh' if is_refresh_mode else 'password_login'
-                if session_id in password_login_sessions:
-                    password_login_sessions[session_id]['slider_instance'] = slider_instance
-                _set_password_login_session_status(
-                    session_id,
-                    'processing',
-                    phase='submitting_credentials',
-                    progress_message='正在提交账号信息并等待闲鱼响应…',
-                )
                 cookies_dict = slider_instance.login_with_password_playwright(
                     account=account,
                     password=password,
                     show_browser=show_browser,
                     notification_callback=notification_callback,
-                    force_clean_context=is_refresh_mode,
-                    # 手动刷新遇到平台滑块时立刻结束并返回清晰提示，
-                    # 避免后台反复等待造成前端长期无响应。
-                    stop_on_slider=is_refresh_mode,
+                    force_clean_context=is_refresh_mode
                 )
                 
                 if cookies_dict is None:
@@ -5861,12 +5831,6 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 if is_refresh_mode:
                     try:
                         log_with_user('info', f"刷新模式开始执行Token预检，确认新实例可直接恢复: {account_id}", current_user)
-                        _set_password_login_session_status(
-                            session_id,
-                            'processing',
-                            phase='preflight',
-                            progress_message='登录完成，正在验证新会话是否可用…',
-                        )
                         XianyuLive.mark_manual_refresh_handoff(account_id, source=manual_refresh_owner)
                         temp_xianyu = XianyuLive(
                             cookies_str=cookies_str,
@@ -6005,9 +5969,7 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                     'success',
                     account_id=account_id,
                     is_new_account=is_new_account,
-                    cookie_count=len(merged_cookies_dict),
-                    phase='completed',
-                    progress_message='登录成功，正在刷新账号状态…',
+                    cookie_count=len(merged_cookies_dict)
                 )
                 _close_password_login_pending_verification_risk_logs(
                     session_id,
@@ -6072,7 +6034,7 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
                 # 清理实例（释放并发槽位）
                 try:
                     from utils.xianyu_slider_stealth import concurrency_manager
-                    if slider_instance and concurrency_manager.unregister_instance(account_id, slider_instance):
+                    if concurrency_manager.unregister_instance(account_id, slider_instance):
                         log_with_user('debug', f"已释放并发槽位: {account_id}", current_user)
                 except Exception as cleanup_e:
                     log_with_user('warning', f"清理实例时出错: {str(cleanup_e)}", current_user)
@@ -6141,7 +6103,14 @@ async def _execute_manual_cookie_import(
             'proxy_user': existing_cookie_info.get('proxy_user', ''),
             'proxy_pass': existing_cookie_info.get('proxy_pass', ''),
         }
-        slider_instance = None
+        slider_instance = XianyuSliderStealth(
+            user_id=account_id,
+            enable_learning=True,
+            headless=not show_browser,
+            initial_cookies=cookie_value,
+            proxy=proxy_config,
+        )
+        manual_cookie_import_sessions[session_id]['slider_instance'] = slider_instance
 
         def merge_cookie_dicts_for_import(incoming_cookie_dict: Optional[Dict[str, Any]], source_label: str) -> Dict[str, Any]:
             existing_cookie_dict = trans_cookies(cookie_value)
@@ -6286,20 +6255,7 @@ async def _execute_manual_cookie_import(
                 )
 
         def run_import():
-            nonlocal slider_instance
             try:
-                _set_manual_cookie_import_session_status(session_id, 'processing', phase='starting_browser')
-                # 构造函数会等待滑块并发槽位，最长可能阻塞 60 秒；必须只在后台
-                # 线程中执行，不能占住 FastAPI 事件循环导致 POST 一直转圈。
-                slider_instance = XianyuSliderStealth(
-                    user_id=account_id,
-                    enable_learning=True,
-                    headless=True,
-                    initial_cookies=cookie_value,
-                    proxy=proxy_config,
-                )
-                manual_cookie_import_sessions[session_id]['slider_instance'] = slider_instance
-                _set_manual_cookie_import_session_status(session_id, 'processing', phase='checking_cookie')
                 probe_result = probe_cookie_verification_from_cookie(cookie_value, proxy_config)
                 if probe_result.get('status') == 'cookie_valid':
                     merged_cookies_dict = merge_cookie_dicts_for_import(
@@ -6320,7 +6276,6 @@ async def _execute_manual_cookie_import(
                         f"未拿到最新 verification_url: {probe_result.get('payload') or probe_result}"
                     )
                 log_with_user('info', f"手动导入 Cookie 已解析 verification_url: {account_id}", current_user)
-                _set_manual_cookie_import_session_status(session_id, 'processing', phase='browser_verification')
 
                 strict_result = run_slider_with_fallback(
                     slider_instance,
@@ -6346,8 +6301,7 @@ async def _execute_manual_cookie_import(
             finally:
                 try:
                     from utils.xianyu_slider_stealth import concurrency_manager
-                    if slider_instance is not None:
-                        concurrency_manager.unregister_instance(account_id, slider_instance)
+                    concurrency_manager.unregister_instance(account_id, slider_instance)
                 except Exception:
                     pass
 
@@ -6370,7 +6324,7 @@ async def manual_cookie_import(
     try:
         account_id = str(request.account_id or '').strip()
         cookie_value = str(request.cookie or '').replace('\ufeff', '').strip()
-        show_browser = False
+        show_browser = bool(request.show_browser)
         user_id = current_user['user_id']
 
         if not account_id or not cookie_value:
@@ -6382,31 +6336,11 @@ async def manual_cookie_import(
             if account_id not in user_cookies:
                 return {'success': False, 'message': '该账号ID已被其他用户使用'}
 
-        # 同一用户、同一闲鱼账号只允许一个导入验证流程。前端重复点击或请求
-        # 重试时复用原会话，避免多个 Playwright 实例争抢同账号滑块槽位。
-        now = time.time()
-        for existing_session_id, existing_session in list(manual_cookie_import_sessions.items()):
-            if existing_session.get('user_id') != user_id:
-                continue
-            if str(existing_session.get('account_id') or '').strip() != account_id:
-                continue
-            existing_status = str(existing_session.get('status') or '').strip().lower()
-            session_age = now - float(existing_session.get('timestamp') or now)
-            if existing_status in {'processing', 'verification_required'} and session_age < 900:
-                return {
-                    'success': True,
-                    'session_id': existing_session_id,
-                    'status': existing_status,
-                    'reused': True,
-                    'message': '该账号正在验证中，已继续使用原任务',
-                }
-
         session_id = secrets.token_urlsafe(16)
         manual_cookie_import_sessions[session_id] = {
             'account_id': account_id,
             'show_browser': show_browser,
             'status': 'processing',
-            'phase': 'queued',
             'verification_url': None,
             'screenshot_path': None,
             'verification_type': None,
@@ -6431,7 +6365,7 @@ async def manual_cookie_import(
             'success': True,
             'session_id': session_id,
             'status': 'processing',
-            'message': 'Cookie导入验证任务已进入后台队列',
+            'message': 'Cookie导入验证任务已启动，请等待...',
         }
     except Exception as exc:
         log_with_user('error', f"手动导入 Cookie 异常: {str(exc)}", current_user)
@@ -6494,13 +6428,7 @@ async def check_manual_cookie_import_status(
             }
         return {
             'status': 'processing',
-            'phase': session.get('phase') or 'processing',
-            'message': {
-                'queued': '验证任务已排队',
-                'starting_browser': '正在启动安全验证环境',
-                'checking_cookie': '正在检查 Cookie 登录状态',
-                'browser_verification': '正在处理闲鱼安全验证',
-            }.get(session.get('phase'), 'Cookie 导入验证处理中，请稍候...'),
+            'message': 'Cookie 导入验证处理中，请稍候...',
         }
     except Exception as exc:
         log_with_user('error', f"检查手动导入 Cookie 状态异常: {str(exc)}", current_user)
@@ -6517,8 +6445,9 @@ async def password_login(
         account_id = request.get('account_id')
         account = request.get('account')
         password = request.get('password')
-        # 浏览器窗口功能已从租户侧下线；忽略旧客户端传入值与历史账号配置。
-        show_browser = False
+        # 检查前端是否明确指定了 show_browser 参数
+        show_browser_specified = 'show_browser' in request
+        show_browser = request.get('show_browser', False)
         refresh_mode = request.get('refresh_mode', False)  # 刷新模式：从数据库读取账密
         risk_log_id = None
 
@@ -6541,7 +6470,11 @@ async def password_login(
             if not account or not password:
                 return {'success': False, 'message': '该账号未配置用户名和密码，无法刷新Cookie'}
 
-            log_with_user('info', f"刷新Cookie模式: {account_id}, 用户名: {account}, headless: True", current_user)
+            # 获取 show_browser 设置（只有当前端没有明确指定时，才使用数据库配置）
+            if not show_browser_specified:
+                show_browser = cookie_info.get('show_browser', False)
+
+            log_with_user('info', f"刷新Cookie模式: {account_id}, 用户名: {account}, show_browser: {show_browser}", current_user)
 
             if XianyuLive.is_manual_refresh_active(account_id):
                 return {'success': False, 'message': f'账号 {account_id} 正在执行手动刷新，请稍候再试'}
@@ -6609,8 +6542,7 @@ async def password_login(
             'success': True,
             'session_id': session_id,
             'status': 'processing',
-            'phase': 'queued',
-            'message': '登录任务已创建，正在排队…'
+            'message': '登录任务已启动，请等待...'
         }
         
     except Exception as e:
@@ -6673,8 +6605,6 @@ async def check_password_login_status(
                 'screenshot_path': screenshot_path,
                 'qr_code_url': session.get('qr_code_url'),  # 保留兼容性
                 'verification_type': verification_type,
-                'phase': session.get('phase') or 'waiting_verification',
-                'progress_message': session.get('progress_message') or '请在闲鱼 App 完成验证',
                 'message': f'需要{verification_type}，请查看验证截图' if screenshot_path else f'需要{verification_type}，请点击验证链接'
             }
         elif status == 'success':
@@ -6702,8 +6632,7 @@ async def check_password_login_status(
             # 处理中
             return {
                 'status': 'processing',
-                'phase': session.get('phase') or 'processing',
-                'message': session.get('progress_message') or '登录处理中，请稍候...'
+                'message': '登录处理中，请稍候...'
             }
         
     except Exception as e:
@@ -7251,9 +7180,6 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
     """处理扫码登录获取的Cookie - 先获取真实cookie再保存到数据库"""
     try:
         user_id = current_user['user_id']
-        normalized_unb = str(unb or '').strip()
-        if not normalized_unb:
-            raise ValueError('扫码登录未返回有效账号标识，请重新扫码')
 
         # 检查是否已存在相同unb的账号
         existing_cookies = db_manager.get_all_cookies(user_id)
@@ -7264,7 +7190,7 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
             try:
                 # 解析现有Cookie中的unb
                 existing_cookie_dict = trans_cookies(cookie_value)
-                if str(existing_cookie_dict.get('unb') or '').strip() == normalized_unb:
+                if existing_cookie_dict.get('unb') == unb:
                     existing_account_id = account_id
                     previous_cookie_value = cookie_value
                     break
@@ -7278,7 +7204,7 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
             log_with_user('info', f"扫码登录找到现有账号: {account_id}, UNB: {unb}", current_user)
         else:
             # 创建新账号，使用unb作为账号ID
-            account_id = normalized_unb
+            account_id = unb
 
             # 确保账号ID唯一
             counter = 1
@@ -7342,69 +7268,14 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     real_cookies = updated_cookie_info['cookies_str']
                     log_with_user('info', f"已获取真实cookie，长度: {len(real_cookies)}", current_user)
 
+                    qr_login_grace_minutes = max(5, int(RISK_CONTROL.get('qr_login_grace_minutes', 15) or 15))
+                    qr_login_grace_until = int(time.time() + (qr_login_grace_minutes * 60))
                     task_restarted = False
                     warning_message = None
                     final_cookies = temp_instance.cookies_str or real_cookies
 
-                    # 扫码 API 仅说明登录 Cookie 已取得。必须先取得 IM 的 accessToken，
-                    # 才允许启动会自动连 WebSocket 的账号任务。
-                    log_with_user('info', f"[{account_id}] API 登录成功，开始获取业务连接凭证", current_user)
-                    acquire_result = await xianyu_credential_provider.acquire(
-                        account_id, user_id, final_cookies,
-                        proxy=getattr(temp_instance, 'proxy_config', None),
-                    )
-                    if acquire_result.status == AcquireStatus.VERIFY_REQUIRED:
-                        if acquire_result.context:
-                            try:
-                                await xianyu_credential_provider.start_official_verification(acquire_result.context)
-                            except Exception as verification_browser_error:
-                                log_with_user('warning', f"[{account_id}] 官方验证页面启动失败: {verification_browser_error}", current_user)
-                        verification_url = (acquire_result.context.verification_url if acquire_result.context else None)
-                        if acquire_result.context and acquire_result.context.cookie:
-                            db_manager.update_cookie_account_info(account_id, cookie_value=acquire_result.context.cookie)
-                        message = '扫码登录已完成，但业务连接需要完成闲鱼官方安全验证；验证后请点击“继续获取连接凭证”。'
-                        log_with_user('warning', f"[{account_id}] 获取凭证过程中触发安全验证，已暂停等待人工完成", current_user)
-                        return {
-                            'account_id': account_id,
-                            'is_new_account': is_new_account,
-                            'real_cookie_refreshed': True,
-                            'cookie_length': len(final_cookies),
-                            'credential_status': AcquireStatus.VERIFY_REQUIRED.value,
-                            'verification_url': verification_url,
-                            'remote_control_url': (acquire_result.context.remote_control_url if acquire_result.context else None),
-                            'verification_message': (acquire_result.context.verification_message if acquire_result.context else None),
-                            'task_restarted': False,
-                            'warning_message': message,
-                        }
-                    if acquire_result.status != AcquireStatus.CREDENTIAL_READY or not acquire_result.credential:
-                        warning_message = acquire_result.message or '未取得业务连接凭证，账号任务未启动'
-                        log_with_user('warning', f"[{account_id}] {warning_message}", current_user)
-                        return {
-                            'account_id': account_id,
-                            'is_new_account': is_new_account,
-                            'real_cookie_refreshed': True,
-                            'cookie_length': len(final_cookies),
-                            'credential_status': acquire_result.status.value,
-                            'task_restarted': False,
-                            'warning_message': warning_message,
-                        }
-
-                    final_cookies = acquire_result.credential.cookie
-                    db_manager.update_cookie_account_info(account_id, cookie_value=final_cookies)
-                    XianyuLive.cache_auth_prewarmed_token(
-                        account_id, acquire_result.credential.access_token,
-                        source='credential_provider', device_id=acquire_result.credential.device_id,
-                    )
-                    log_with_user('info', f"[{account_id}] 已获得完整业务连接凭证，开始建立业务连接", current_user)
-
                     try:
                         if cookie_manager.manager:
-                            # 扫码已经完成了人工认证，不能再用“稳定期”拦住新任务的首次认证。
-                            # 旧逻辑会在任务刚启动时阻止 Token 初始化，导致界面显示扫码成功，
-                            # 实际账号却持续处于异常/重连状态。
-                            db_manager.set_cookie_qr_login_grace_until(account_id, 0)
-                            XianyuLive.clear_qr_login_grace(account_id)
-                            XianyuLive.clear_password_login_failure_backoff(account_id)
                             if is_new_account:
                                 cookie_manager.manager.add_cookie(account_id, final_cookies, user_id=user_id)
                                 log_with_user('info', f"已将真实cookie添加到cookie_manager: {account_id}", current_user)
@@ -7413,8 +7284,15 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                                 cookie_manager.manager.update_cookie(account_id, final_cookies, save_to_db=False)
                                 log_with_user('info', f"已更新cookie_manager中的真实cookie: {account_id}", current_user)
                             task_restarted = True
+                            db_manager.set_cookie_qr_login_grace_until(account_id, qr_login_grace_until)
+                            XianyuLive.mark_qr_login_grace(account_id, stage='real_cookie_ready', grace_until=qr_login_grace_until)
+                            # 扫码刚拿到全新可信 cookie，立即清掉旧的密码登录失败退避，
+                            # 否则 init() 会被旧的 slider_failed/credentials 退避 skip，
+                            # 表现为"扫码完成但 WS 起不来"（详见 22:43 / 22:08 那两次链路）。
+                            XianyuLive.clear_password_login_failure_backoff(account_id)
                             log_with_user('info', f"扫码成功后已清除密码登录失败退避: {account_id}", current_user)
-                            log_with_user('info', f"真实Cookie已获取，账号任务已切换并开始恢复连接: {account_id}", current_user)
+                            warning_message = f"真实Cookie已获取，账号任务已切换；为降低再次触发风控的概率，将进入 {qr_login_grace_minutes} 分钟稳定期，稳定期内不自动预热Token"
+                            log_with_user('warning', f"{warning_message}: {account_id}", current_user)
                         else:
                             warning_message = "真实Cookie已获取，但任务管理器未初始化，未启动账号任务"
                             log_with_user('warning', f"{warning_message}: {account_id}", current_user)
@@ -7444,6 +7322,7 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                         try:
                             if task_restarted:
                                 processing_result = '扫码登录真实Cookie获取成功，账号任务已启动'
+                                processing_result += f'；已进入 {qr_login_grace_minutes} 分钟稳定期，稳定期内不自动预热Token'
                                 db_manager.update_risk_control_log(
                                     log_id=risk_log_id,
                                     processing_status='success',
@@ -7485,7 +7364,6 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                         'real_cookie_refreshed': task_restarted,  # 回滚时为 False，成功切换时为 True
                         'cookie_length': len(final_cookies),
                         'token_prewarmed': False,
-                        'credential_status': AcquireStatus.CONNECTING.value if task_restarted else AcquireStatus.FAILED.value,
                         'task_restarted': task_restarted,
                         'warning_message': warning_message
                     }
@@ -7608,38 +7486,6 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
             db_manager.update_cookie_account_info(account_id, cookie_value=cookies)
             log_with_user('info', f"降级处理 - 现有账号原始cookie已更新: {account_id}", current_user)
 
-        # 即使“补充真实 Cookie”的浏览器步骤失败，也不能直接把 API 登录态
-        # 当作在线。仍先验证 IM accessToken 是否可取得。
-        acquire_result = await xianyu_credential_provider.acquire(account_id, user_id, cookies)
-        if acquire_result.status == AcquireStatus.VERIFY_REQUIRED:
-            if acquire_result.context:
-                try:
-                    await xianyu_credential_provider.start_official_verification(acquire_result.context)
-                except Exception as verification_browser_error:
-                    log_with_user('warning', f"[{account_id}] 官方验证页面启动失败: {verification_browser_error}", current_user)
-            if acquire_result.context and acquire_result.context.cookie:
-                db_manager.update_cookie_account_info(account_id, cookie_value=acquire_result.context.cookie)
-            return {
-                'account_id': account_id, 'is_new_account': is_new_account,
-                'real_cookie_refreshed': False, 'fallback_reason': error_reason,
-                'cookie_length': len(cookies), 'credential_status': AcquireStatus.VERIFY_REQUIRED.value,
-                'verification_url': acquire_result.context.verification_url if acquire_result.context else None,
-                'remote_control_url': acquire_result.context.remote_control_url if acquire_result.context else None,
-                'verification_message': acquire_result.context.verification_message if acquire_result.context else None,
-                'task_restarted': False,
-            }
-        if acquire_result.status != AcquireStatus.CREDENTIAL_READY or not acquire_result.credential:
-            return {
-                'account_id': account_id, 'is_new_account': is_new_account,
-                'real_cookie_refreshed': False, 'fallback_reason': error_reason,
-                'cookie_length': len(cookies), 'credential_status': acquire_result.status.value,
-                'task_restarted': False, 'warning_message': acquire_result.message,
-            }
-        cookies = acquire_result.credential.cookie
-        db_manager.update_cookie_account_info(account_id, cookie_value=cookies)
-        from XianyuAutoAsync import XianyuLive
-        XianyuLive.cache_auth_prewarmed_token(account_id, acquire_result.credential.access_token, source='credential_provider_fallback', device_id=acquire_result.credential.device_id)
-
         # 添加到或更新cookie_manager
         if cookie_manager.manager:
             if is_new_account:
@@ -7655,9 +7501,7 @@ async def _fallback_save_qr_cookie(account_id: str, cookies: str, user_id: int, 
             'is_new_account': is_new_account,
             'real_cookie_refreshed': False,
             'fallback_reason': error_reason,
-            'cookie_length': len(cookies),
-            'credential_status': AcquireStatus.CONNECTING.value,
-            'task_restarted': bool(cookie_manager.manager),
+            'cookie_length': len(cookies)
         }
 
     except Exception as fallback_e:

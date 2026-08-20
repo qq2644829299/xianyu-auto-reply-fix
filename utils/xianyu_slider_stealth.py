@@ -144,7 +144,6 @@ def probe_cookie_verification_from_cookie(
     cookie_text: str,
     proxy: Optional[Dict[str, Any]] = None,
     timeout: float = 30,
-    device_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     import requests
 
@@ -192,9 +191,7 @@ def probe_cookie_verification_from_cookie(
         proxy_url = f"{proxy_type}://{auth}{proxy_host}:{proxy_port}"
         proxies = {"http": proxy_url, "https": proxy_url}
 
-    # 接入流程必须沿用创建登录上下文时的 deviceId；重新生成会让 token
-    # 与后续 WebSocket /reg 的 did 不属于同一条业务会话。
-    device_id = str(device_id or "").strip() or generate_cookie_verification_device_id(user_id)
+    device_id = generate_cookie_verification_device_id(user_id)
     ts = str(int(time.time()) * 1000)
     data_val = (
         '{"appKey":"444e9908a51d1cb236a27862abc769c9",'
@@ -1340,67 +1337,6 @@ class XianyuSliderStealth:
 
             screenshot_bytes = None
 
-            # 二维码验证时优先只截取二维码元素，避免把整张登录页缩小后导致无法扫码。
-            qr_selectors = (
-                'img[alt*="二维码"]',
-                'img[alt*="扫码"]',
-                'img[src*="qrcode"]',
-                'canvas[class*="qrcode"]',
-                '.qr-code',
-                '#qr-code',
-                '[class*="qr-code"]',
-                '[id*="qr-code"]',
-            )
-            qr_scopes = [scope for scope in (frame, page) if scope is not None]
-            for scope in qr_scopes:
-                if screenshot_bytes is not None:
-                    break
-                for selector in qr_selectors:
-                    try:
-                        candidates = scope.query_selector_all(selector)
-                        visible_candidates = []
-                        for candidate in candidates:
-                            if not candidate.is_visible():
-                                continue
-                            box = candidate.bounding_box() or {}
-                            width = float(box.get('width') or 0)
-                            height = float(box.get('height') or 0)
-                            if width >= 80 and height >= 80 and 0.55 <= width / max(height, 1) <= 1.8:
-                                visible_candidates.append((width * height, candidate))
-                        if visible_candidates:
-                            _, qr_element = max(visible_candidates, key=lambda item: item[0])
-                            screenshot_bytes = qr_element.screenshot(timeout=5000)
-                            logger.info(f"【{self.pure_user_id}】优先截取二维码元素成功: {selector}")
-                            break
-                    except Exception as e:
-                        logger.debug(f"【{self.pure_user_id}】截取二维码元素失败({selector}): {e}")
-
-            # 闲鱼的 mini_login 验证页常不为二维码图片标注 class/src。
-            # 在二维码所在 frame 内按可见、近正方形的 img/canvas 兜底选择，
-            # 只截该元素，避免把整个登录页缩小成无法扫描的二维码。
-            if screenshot_bytes is None:
-                for scope in qr_scopes:
-                    try:
-                        candidates = []
-                        for candidate in scope.query_selector_all('img, canvas'):
-                            if not candidate.is_visible():
-                                continue
-                            box = candidate.bounding_box() or {}
-                            width = float(box.get('width') or 0)
-                            height = float(box.get('height') or 0)
-                            ratio = width / max(height, 1)
-                            if 80 <= width <= 600 and 80 <= height <= 600 and 0.80 <= ratio <= 1.20:
-                                candidates.append((width * height, candidate, width, height))
-                        if candidates:
-                            _, qr_element, width, height = max(candidates, key=lambda item: item[0])
-                            screenshot_bytes = qr_element.screenshot(timeout=5000)
-                            logger.info(
-                                f"【{self.pure_user_id}】按可见近方形元素截取二维码成功: {width:.0f}x{height:.0f}"
-                            )
-                            break
-                    except Exception as e:
-                        logger.debug(f"【{self.pure_user_id}】兜底扫描二维码元素失败: {e}")
-
             # 方式1：通过 frame.frame_element() 截取 iframe 元素
             if frame is not None and screenshot_bytes is None:
                 try:
@@ -1452,7 +1388,7 @@ class XianyuSliderStealth:
                 return None
 
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"face_verify_{self.pure_user_id}_{timestamp}.png"
+            filename = f"face_verify_{self.pure_user_id}_{timestamp}.jpg"
             file_path = os.path.join(screenshots_dir, filename)
 
             with open(file_path, 'wb') as f:
@@ -1706,9 +1642,6 @@ class XianyuSliderStealth:
 
     def _detect_local_browser_info(self) -> Dict[str, Any]:
         if os.name != 'nt':
-            # 生产镜像已通过系统包安装 Chromium。优先复用它，避免每次镜像或
-            # Playwright 版本变化后在运行时重新下载数百 MB 浏览器，且下载失败会
-            # 直接导致 Cookie 风控验证不可用。
             browser_candidates = [
                 {"family": "chrome", "channel": "", "path": "/usr/bin/chromium"},
                 {"family": "chrome", "channel": "", "path": "/usr/bin/chromium-browser"},
@@ -10289,17 +10222,6 @@ class XianyuSliderStealth:
         """
         try:
             logger.info(f"【{self.pure_user_id}】检测二维码/人脸验证...")
-
-            # 手动刷新 Cookie 的请求必须及时结束。旧逻辑在这里会先自动尝试滑块，
-            # 直到多轮重试结束后上层才知道遇到了滑块，因此页面会长期没有响应。
-            if getattr(self, '_stop_on_slider', False) and self._page_has_slider(page):
-                message = '闲鱼要求滑块验证，已停止本次刷新。请先使用“扫码登录”完成验证。'
-                self.last_login_error = message
-                self._start_password_login_slider_risk_log(
-                    verification_url=getattr(page, 'url', None),
-                    detection_phase='manual_refresh_slider_stop',
-                )
-                raise PasswordLoginVerificationError(message)
             
             # 先检查是否是滑块验证，如果是滑块验证，立即处理并返回
             slider_selectors = [
@@ -11062,8 +10984,7 @@ class XianyuSliderStealth:
     
     def login_with_password_playwright(self, account: str, password: str, show_browser: bool = False,
                                       notification_callback: Optional[Callable] = None,
-                                      force_clean_context: bool = False,
-                                      stop_on_slider: bool = False) -> dict:
+                                      force_clean_context: bool = False) -> dict:
         """使用Playwright进行密码登录（新方法，替代DrissionPage）
         
         Args:
@@ -11080,8 +11001,6 @@ class XianyuSliderStealth:
             self.last_login_error = ""
             previous_slider_refresh_mode = getattr(self, '_slider_refresh_mode', False)
             self._slider_refresh_mode = force_clean_context
-            previous_stop_on_slider = getattr(self, '_stop_on_slider', False)
-            self._stop_on_slider = bool(stop_on_slider)
             previous_risk_trigger_scene = getattr(self, 'risk_trigger_scene', None)
             inferred_risk_trigger_scene = 'manual_password_refresh' if force_clean_context else 'password_login'
             if not previous_risk_trigger_scene:
@@ -11443,22 +11362,6 @@ class XianyuSliderStealth:
                                     continue
                         
                         if has_slider:
-                            # 手动刷新不应在滑块页中反复等待或尝试，避免页面持续显示“加载中”。
-                            # 该场景交由用户通过扫码登录完成平台要求的身份验证后再恢复账号。
-                            if stop_on_slider:
-                                verification_url = (
-                                    detected_slider_frame.url
-                                    if detected_slider_frame and hasattr(detected_slider_frame, 'url')
-                                    else getattr(page, 'url', None)
-                                )
-                                message = '闲鱼要求滑块验证，已停止本次账密刷新。请使用“扫码登录”完成账号验证后再继续。'
-                                logger.warning(f"【{self.pure_user_id}】{message}")
-                                self._start_password_login_slider_risk_log(
-                                    verification_url=verification_url,
-                                    detection_phase='manual_refresh_slider_stop',
-                                )
-                                return self._fail_login(message)
-
                             # 设置检测到的frame，供solve_slider使用
                             self._detected_slider_frame = detected_slider_frame
                             if effective_clean_context:
@@ -12180,7 +12083,6 @@ class XianyuSliderStealth:
             return self._fail_login(error_message if error_message else "密码登录流程异常")
         finally:
             self._slider_refresh_mode = previous_slider_refresh_mode
-            self._stop_on_slider = previous_stop_on_slider
             self._password_slider_runtime_hardened = False
             self.risk_trigger_scene = previous_risk_trigger_scene
             # 最外层 finally：确保任何退出路径都释放并发槽位
@@ -12696,13 +12598,6 @@ class XianyuSliderStealth:
                 else:
                     logger.warning(f"【{self.pure_user_id}】滑块验证失败")
                     monitor_page = self._select_monitor_page(self.context, self.page) or self.page
-                    # 当前页仍是同一个滑块时，不能再交给二维码检测函数重复拖动。
-                    # 旧逻辑会从这里重新进入三轮滑块处理，造成风控失败不断累积，
-                    # 同时让手动刷新请求看起来始终没有响应。
-                    if self._page_has_slider(monitor_page):
-                        logger.warning(f"【{self.pure_user_id}】滑块首次处理失败且页面仍停留在滑块，停止重复验证")
-                        self._save_debug_snapshot("run_failed", getattr(self, "_detected_slider_frame", None))
-                        return False, None
                     has_qr, qr_frame = self._detect_qr_code_verification(monitor_page)
                     if has_qr:
                         logger.warning(f"【{self.pure_user_id}】滑块流程结束后检测到身份验证页，转入验证等待流程")
