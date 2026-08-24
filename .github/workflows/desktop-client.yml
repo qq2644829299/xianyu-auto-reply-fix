@@ -35,7 +35,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          hdiutil create -volname "鱼智云本地客户端" -srcfolder dist-desktop -ov -format UDZO release/FishCloudLocal.dmg
+          # UDRO is a directly mountable read-only DMG.  Avoiding the slow
+          # compression pass keeps Intel builds from spending many minutes at
+          # the final packaging step.
+          hdiutil create -volname "鱼智云本地客户端" -srcfolder dist-desktop -ov -format UDRO release/FishCloudLocal.dmg
       - name: Package Windows application
         if: runner.os == 'Windows'
         run: python desktop/package_windows.py
