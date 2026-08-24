@@ -7,11 +7,13 @@ token 请求作为单独阶段处理；出现官方安全校验时只保存上�
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import time
 import uuid
 import shutil
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -208,6 +210,11 @@ class XianyuCredentialProvider:
         if cookies:
             await browser_context.add_cookies(cookies)
         page = await browser_context.new_page()
+        # 预检也必须读取这个刚建立的同一浏览器上下文，不能等到验证页创建
+        # 完成后再登记，否则会退回到后台 HTTP 请求。
+        context.browser = (playwright, browser)
+        context.browser_context = browser_context
+        context.verification_page = page
         try:
             logger.info(
                 '打开官方验证页: account={}, host={}, mode={}',
@@ -221,6 +228,21 @@ class XianyuCredentialProvider:
             official_im_url = 'https://www.goofish.com/im'
             await page.goto(official_im_url, wait_until='domcontentloaded', timeout=30000)
             await page.wait_for_timeout(3000)
+            # 让官方浏览器本身发起 IM token 请求，安全验证会绑定到用户眼前的
+            # 这一个页面，而非早先后台 HTTP 请求下发的一次性挑战链接。
+            try:
+                browser_probe = await self._probe_im_token_in_official_browser(context, page)
+                if browser_probe.get('verification_url'):
+                    context.verification_url = str(browser_probe['verification_url'])
+                logger.info(
+                    '官方浏览器 IM 凭证预检: account={}, status={}',
+                    context.account_id, browser_probe.get('status'),
+                )
+            except Exception as browser_probe_error:
+                logger.warning(
+                    '官方浏览器 IM 凭证预检失败，保留原验证页兜底: account={}, error={}',
+                    context.account_id, browser_probe_error,
+                )
             official_dialog_visible = False
             for selector in ('iframe#baxia-dialog-content', '.baxia-dialog', '#nocaptcha', '.nc-container'):
                 try:
@@ -238,6 +260,9 @@ class XianyuCredentialProvider:
         except Exception:
             await browser.close()
             await playwright.stop()
+            context.browser = None
+            context.browser_context = None
+            context.verification_page = None
             raise
         context.browser = (playwright, browser)
         context.browser_context = browser_context
@@ -260,6 +285,76 @@ class XianyuCredentialProvider:
             context.cookie = '; '.join(f'{key}={value}' for key, value in merged.items())
         except Exception:
             pass
+
+    async def _probe_im_token_in_official_browser(
+        self, context: LoginContext, page: Any = None,
+    ) -> Dict[str, Any]:
+        """在用户正在操作的官方浏览器中请求 IM 登录凭证。
+
+        闲鱼的安全挑战绑定发起请求的浏览器会话。先用后台 HTTP 请求拿挑战，
+        再把链接交给另一套浏览器，会让人工滑动落在错误会话中。这里没有任何
+        自动验证码处理，只由同一官方页面发起请求并保留其 Cookie。
+        """
+        if not context.browser_context:
+            raise RuntimeError('官方浏览器会话不存在')
+        page = page or context.verification_page
+        if page is None:
+            page = await context.browser_context.new_page()
+            context.verification_page = page
+
+        await self._collect_official_verification_cookies(context)
+        cookie_values = trans_cookies(context.cookie)
+        token_seed = str(cookie_values.get('_m_h5_tk') or '').split('_', 1)[0].strip()
+        if not token_seed:
+            raise ValueError('官方浏览器会话缺少 _m_h5_tk，需重新扫码登录')
+
+        timestamp = str(int(time.time() * 1000))
+        data_value = json.dumps(
+            {'appKey': '444e9908a51d1cb236a27862abc769c9', 'deviceId': context.device_id},
+            separators=(',', ':'), ensure_ascii=False,
+        )
+        signature = hashlib.md5(
+            f'{token_seed}&{timestamp}&34839810&{data_value}'.encode('utf-8')
+        ).hexdigest()
+        query = urlencode({
+            'jsv': '2.7.2', 'appKey': '34839810', 't': timestamp, 'sign': signature,
+            'v': '1.0', 'type': 'originaljson', 'accountSite': 'xianyu',
+            'dataType': 'json', 'timeout': '20000',
+            'api': 'mtop.taobao.idlemessage.pc.login.token',
+            'sessionOption': 'AutoLoginOnly', 'spm_cnt': 'a21ybx.im.0.0',
+        })
+        endpoint = f'https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.login.token/1.0/?{query}'
+        response = await page.evaluate(
+            """async ({ endpoint, dataValue }) => {
+                const result = await fetch(endpoint, {
+                    method: 'POST', credentials: 'include',
+                    headers: {
+                        'accept': 'application/json',
+                        'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                    },
+                    body: new URLSearchParams({ data: dataValue }).toString(),
+                });
+                return { status: result.status, text: await result.text() };
+            }""",
+            {'endpoint': endpoint, 'dataValue': data_value},
+        )
+        await self._collect_official_verification_cookies(context)
+        try:
+            payload = json.loads(str(response.get('text') or '{}'))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f'官方浏览器请求返回异常: HTTP {response.get("status")}, {exc}') from exc
+        data = payload.get('data') or {}
+        verification_url = str(data.get('url') or '').strip() or None
+        success_ret = any('SUCCESS::调用成功' in str(item) for item in (payload.get('ret') or []))
+        has_token = bool(str(data.get('accessToken') or '').strip())
+        return {
+            'status': 'verification_required' if verification_url else ('cookie_valid' if success_ret and has_token else 'unknown'),
+            'verification_url': verification_url,
+            'payload': payload,
+            'session_cookies': trans_cookies(context.cookie),
+            'success_ret': success_ret,
+            'has_token_payload': has_token,
+        }
 
     def validate_credential(self, credential: Optional[XianyuConnectionCredential]) -> bool:
         return bool(
@@ -313,9 +408,12 @@ class XianyuCredentialProvider:
             self._contexts[str(account_id)] = current
 
         try:
-            probe = await asyncio.to_thread(
-                probe_cookie_verification_from_cookie, current.cookie, proxy, 30, current.device_id
-            )
+            if current.browser_context and current.verification_page:
+                probe = await self._probe_im_token_in_official_browser(current)
+            else:
+                probe = await asyncio.to_thread(
+                    probe_cookie_verification_from_cookie, current.cookie, proxy, 30, current.device_id
+                )
         except ValueError as exc:
             current.stage = AcquireStatus.LOGIN_EXPIRED
             current.updated_at = time.time()
