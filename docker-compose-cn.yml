@@ -27,11 +27,12 @@ services:
       # 开发模式：挂载源代码（修改代码后只需重启容器）
       - .:/app:rw
     environment:
-      # 启用虚拟显示（有头模式）
-      # - USE_XVFB=true           # 启用 Xvfb 虚拟显示
-      # - ENABLE_HEADFUL=true     # 启用有头模式
-      # - ENABLE_VNC=true         # 启用 VNC 服务器（可选）
-      # - DISPLAY=:99             # 虚拟显示编号
+      # 人工安全验证必须在同一个可见浏览器会话中进行。VNC 仅在容器内部
+      # 监听，页面通过受随机会话保护的应用通道访问，不暴露端口到公网。
+      - USE_XVFB=true
+      - ENABLE_HEADFUL=true
+      - ENABLE_VNC=true
+      - DISPLAY=:99
       
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
       - PYTHONDONTWRITEBYTECODE=${PYTHONDONTWRITEBYTECODE:-1}
