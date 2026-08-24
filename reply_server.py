@@ -7268,8 +7268,12 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                     real_cookies = updated_cookie_info['cookies_str']
                     log_with_user('info', f"已获取真实cookie，长度: {len(real_cookies)}", current_user)
 
-                    qr_login_grace_minutes = max(5, int(RISK_CONTROL.get('qr_login_grace_minutes', 15) or 15))
-                    qr_login_grace_until = int(time.time() + (qr_login_grace_minutes * 60))
+                    # 扫码成功不能只保存 Cookie 后强制等待数分钟：业务连接的
+                    # Token 尚未取得时，前端会把 WS / 保活 / Token / 消息流全
+                    # 部显示为未就绪。现在立即进入真实凭证获取；若闲鱼要求
+                    # 安全验证，会在同一会话中明确交给用户，而不是静默等待。
+                    qr_login_grace_minutes = max(0, int(RISK_CONTROL.get('qr_login_grace_minutes', 0) or 0))
+                    qr_login_grace_until = int(time.time() + (qr_login_grace_minutes * 60)) if qr_login_grace_minutes else 0
                     task_restarted = False
                     warning_message = None
                     final_cookies = temp_instance.cookies_str or real_cookies
@@ -7284,15 +7288,23 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                                 cookie_manager.manager.update_cookie(account_id, final_cookies, save_to_db=False)
                                 log_with_user('info', f"已更新cookie_manager中的真实cookie: {account_id}", current_user)
                             task_restarted = True
-                            db_manager.set_cookie_qr_login_grace_until(account_id, qr_login_grace_until)
-                            XianyuLive.mark_qr_login_grace(account_id, stage='real_cookie_ready', grace_until=qr_login_grace_until)
+                            if qr_login_grace_until:
+                                db_manager.set_cookie_qr_login_grace_until(account_id, qr_login_grace_until)
+                                XianyuLive.mark_qr_login_grace(account_id, stage='real_cookie_ready', grace_until=qr_login_grace_until)
+                            else:
+                                db_manager.set_cookie_qr_login_grace_until(account_id, 0)
+                                XianyuLive.clear_qr_login_grace(account_id)
                             # 扫码刚拿到全新可信 cookie，立即清掉旧的密码登录失败退避，
                             # 否则 init() 会被旧的 slider_failed/credentials 退避 skip，
                             # 表现为"扫码完成但 WS 起不来"（详见 22:43 / 22:08 那两次链路）。
                             XianyuLive.clear_password_login_failure_backoff(account_id)
                             log_with_user('info', f"扫码成功后已清除密码登录失败退避: {account_id}", current_user)
-                            warning_message = f"真实Cookie已获取，账号任务已切换；为降低再次触发风控的概率，将进入 {qr_login_grace_minutes} 分钟稳定期，稳定期内不自动预热Token"
-                            log_with_user('warning', f"{warning_message}: {account_id}", current_user)
+                            if qr_login_grace_until:
+                                warning_message = f"真实Cookie已获取，账号任务已切换；将进入 {qr_login_grace_minutes} 分钟稳定期，稳定期内不自动预热Token"
+                                log_with_user('warning', f"{warning_message}: {account_id}", current_user)
+                            else:
+                                warning_message = "真实Cookie已获取，账号任务已切换；正在获取实际连接凭证"
+                                log_with_user('info', f"{warning_message}: {account_id}", current_user)
                         else:
                             warning_message = "真实Cookie已获取，但任务管理器未初始化，未启动账号任务"
                             log_with_user('warning', f"{warning_message}: {account_id}", current_user)
@@ -7322,7 +7334,10 @@ async def process_qr_login_cookies(cookies: str, unb: str, current_user: Dict[st
                         try:
                             if task_restarted:
                                 processing_result = '扫码登录真实Cookie获取成功，账号任务已启动'
-                                processing_result += f'；已进入 {qr_login_grace_minutes} 分钟稳定期，稳定期内不自动预热Token'
+                                if qr_login_grace_until:
+                                    processing_result += f'；已进入 {qr_login_grace_minutes} 分钟稳定期，稳定期内不自动预热Token'
+                                else:
+                                    processing_result += '；已开始获取实际连接凭证'
                                 db_manager.update_risk_control_log(
                                     log_id=risk_log_id,
                                     processing_status='success',

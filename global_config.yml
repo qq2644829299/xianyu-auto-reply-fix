@@ -75,7 +75,7 @@ RISK_CONTROL:
   night_keepalive_multiplier: 3
   night_mode_enabled: false
   night_start_hour: 1
-  qr_login_grace_minutes: 15
+  qr_login_grace_minutes: 0
   post_slider_retry_delay_max: 10.0
   post_slider_retry_delay_min: 5.0
   token_refresh_dedup_window_seconds: 60

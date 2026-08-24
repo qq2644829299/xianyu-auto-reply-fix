@@ -126,7 +126,7 @@ RISK_CONTROL = config.get('RISK_CONTROL', {
     'night_mode_enabled': False,
     'night_start_hour': 1,
     'night_end_hour': 6,
-    'qr_login_grace_minutes': 15,
+    'qr_login_grace_minutes': 0,
     'night_keepalive_multiplier': 3,
     'night_cookie_refresh_multiplier': 2,
     'backoff_escalation_factor': 1.5,
