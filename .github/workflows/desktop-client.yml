@@ -9,6 +9,9 @@ on:
 jobs:
   build:
     strategy:
+      # Keep producing the macOS installer even if the independent Windows
+      # package happens to fail.
+      fail-fast: false
       matrix:
         include:
           # macos-13 is GitHub's Intel runner.  The current customer machine
