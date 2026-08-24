@@ -15500,8 +15500,8 @@ function showVerificationRequired(data) {
         </div>
     `;
     } else if (remoteControlUrl) {
-    const verificationEntryUrl = remoteControlUrl;
-    const verificationEntryLabel = '打开官方验证操作页';
+        const verificationEntryUrl = remoteControlUrl;
+    const verificationEntryLabel = '打开闲鱼官方验证页面';
     verificationHtml = `
         <div class="text-center">
         <div class="mb-4">
@@ -15510,11 +15510,11 @@ function showVerificationRequired(data) {
         <h5 class="text-warning mb-3">账号需要闲鱼验证</h5>
         <div class="alert alert-warning border-0 mb-4">
             <i class="bi bi-info-circle me-2"></i>
-            <strong>已打开服务器原会话，请在该页手工完成官方验证</strong>
+            <strong>已保留原始登录会话，请在闲鱼官方页面完成验证</strong>
         </div>
         <div class="mb-4">
-            <p class="text-muted mb-3">请在操作页完成滑块；该页面与服务器保存的登录会话相同。</p>
-            <a id="openRemoteCaptchaControl" href="${verificationEntryUrl}" target="_self" class="btn btn-outline-warning">
+            <p class="text-muted mb-3">打开后会直接显示闲鱼原页面及其官方验证提示，不再使用截图或自制滑块框。</p>
+            <a id="openRemoteCaptchaControl" href="${verificationEntryUrl}" target="_blank" rel="noopener" class="btn btn-outline-warning">
             <i class="bi bi-box-arrow-up-right me-2"></i>
             ${verificationEntryLabel}
             </a>
@@ -15553,22 +15553,6 @@ function showVerificationRequired(data) {
 
     verificationContainer.innerHTML = verificationHtml;
     verificationContainer.style.display = 'block';
-
-    // 远程人工滑块只能有一个控制窗口。过去这里打开新页面后，全局监控又嵌入
-    // 同一会话，两个 WebSocket 交错发送鼠标事件，官方验证必然失败。
-    if (remoteControlUrl) {
-        const controlLink = document.getElementById('openRemoteCaptchaControl');
-        if (controlLink) {
-            controlLink.addEventListener('click', (event) => {
-                event.preventDefault();
-                const parts = new URL(remoteControlUrl, window.location.origin).pathname.split('/');
-                const sessionId = decodeURIComponent(parts[parts.length - 1] || '');
-                if (!sessionId) return;
-                monitoredSessions.add(sessionId);
-                showCaptchaVerificationModal(sessionId);
-            }, { once: true });
-        }
-    }
 
     // 显示Toast提示
     if (!qrCodeVerificationState.toastShown) {

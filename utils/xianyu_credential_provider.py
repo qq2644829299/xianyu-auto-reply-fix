@@ -210,11 +210,26 @@ class XianyuCredentialProvider:
                 target_host or 'unknown',
                 'headful' if headful_enabled else 'headless',
             )
-            await page.goto(context.verification_url, wait_until='domcontentloaded', timeout=30000)
-            # 等待官方页面完成跳转与渲染，再交给用户操作，避免二维码过早截取而失效。
-            await page.wait_for_timeout(2500)
+            # 先打开闲鱼 IM 正页。用户贴出的官方页面正是在这里以 baxia
+            # 官方弹层展示安全校验；不再把滑块截图出来放到自制画布里操作。
+            # 如果官方页没有接住本次校验，再回到它下发的原始验证地址。
+            official_im_url = 'https://www.goofish.com/im'
+            await page.goto(official_im_url, wait_until='domcontentloaded', timeout=30000)
+            await page.wait_for_timeout(3000)
+            official_dialog_visible = False
+            for selector in ('iframe#baxia-dialog-content', '.baxia-dialog', '#nocaptcha', '.nc-container'):
+                try:
+                    locator = page.locator(selector).first
+                    if await locator.is_visible(timeout=500):
+                        official_dialog_visible = True
+                        break
+                except Exception:
+                    continue
+            if not official_dialog_visible:
+                await page.goto(context.verification_url, wait_until='domcontentloaded', timeout=30000)
+                await page.wait_for_timeout(2000)
             session_id = f'credential-{context.account_id}-{uuid.uuid4().hex[:12]}'
-            session = await captcha_controller.create_session(session_id, page)
+            await captcha_controller.create_desktop_session(session_id, page)
         except Exception:
             await browser.close()
             await playwright.stop()
@@ -222,18 +237,10 @@ class XianyuCredentialProvider:
         context.browser = (playwright, browser)
         context.browser_context = browser_context
         context.verification_page = page
-        # 没有真实滑块时不开放截图鼠标转发页，也不允许把外部 URL 当作
-        # 同一会话的验证入口。此时用户重新发起验证即可获得新的官方会话。
-        if session:
-            context.remote_session_id = session_id
-            context.remote_control_url = f'/api/captcha/control/{session_id}'
-        else:
-            context.remote_session_id = None
-            context.remote_control_url = None
-            # 页面不是可操作滑块时不能留一个无人能操作的浏览器进程；先收集
-            # 它可能刚刷新过的 Cookie，再关闭，下一次恢复会创建全新官方页。
-            await self._close_official_verification(context, preserve_cookie=True)
-            context.verification_message = '官方验证页未出现可操作的滑块（可能已失效或为错误页），请重新发起验证。'
+        context.remote_session_id = session_id
+        # 打开的是 noVNC 直连到同一 Chromium 窗口的入口。所有鼠标和滑动均
+        # 由用户直接交给闲鱼官方页面，服务端不再转发或合成滑块轨迹。
+        context.remote_control_url = f'/api/captcha/desktop/view/{session_id}'
         context.updated_at = time.time()
         return context
 

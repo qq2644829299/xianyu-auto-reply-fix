@@ -17,7 +17,28 @@ class CaptchaRemoteController:
     
     def __init__(self):
         self.active_sessions: Dict[str, Dict[str, Any]] = {}
+        # 桌面接管会话不复制、截图或转发鼠标。浏览器由 noVNC 直接显示，
+        # 用户看到和操作的是服务器 Chromium 中的闲鱼官方页面本身。
+        self.desktop_sessions: Dict[str, Dict[str, Any]] = {}
         self.websocket_connections: Dict[str, Any] = {}
+
+    async def create_desktop_session(self, session_id: str, page: Page) -> Dict[str, Any]:
+        """登记一个可由 noVNC 查看的官方人工验证会话。
+
+        这里刻意不识别滑块、更不模拟拖动。页面中的 baxia 官方验证层由
+        闲鱼自行渲染，用户通过远程桌面在原浏览器会话中亲自完成验证。
+        """
+        self.desktop_sessions[session_id] = {
+            'page': page,
+            'completed': False,
+            'initial_url': str(getattr(page, 'url', '') or ''),
+            'initial_cookie_fingerprint': await self._cookie_fingerprint(page),
+        }
+        logger.info("✅ 创建官方页面桌面验证会话: {}", session_id)
+        return self.desktop_sessions[session_id]
+
+    def get_desktop_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        return self.desktop_sessions.get(session_id)
     
     async def create_session(self, session_id: str, page: Page) -> Optional[Dict[str, str]]:
         """
@@ -405,11 +426,12 @@ class CaptchaRemoteController:
         页面不能是已知错误状态；最终是否能恢复连接仍由 credential provider
         重新请求业务 token 作权威校验。
         """
-        if session_id not in self.active_sessions:
+        session = self.active_sessions.get(session_id) or self.desktop_sessions.get(session_id)
+        if not session:
             return False
         
         try:
-            page = self.active_sessions[session_id]['page']
+            page = session['page']
             
             # 多个选择器检查，确保更准确
             captcha_selectors = [
@@ -475,7 +497,6 @@ class CaptchaRemoteController:
                 logger.info(f"官方验证页仍为错误/失效状态，不认定完成: {session_id}")
                 return False
 
-            session = self.active_sessions[session_id]
             cookie_changed = bool(session.get('initial_cookie_fingerprint')) and (
                 await self._cookie_fingerprint(page) != session.get('initial_cookie_fingerprint')
             )
@@ -501,13 +522,14 @@ class CaptchaRemoteController:
     
     def is_completed(self, session_id: str) -> bool:
         """检查会话是否已完成"""
-        if session_id not in self.active_sessions:
+        session = self.active_sessions.get(session_id) or self.desktop_sessions.get(session_id)
+        if not session:
             return False
-        return self.active_sessions[session_id].get('completed', False)
+        return session.get('completed', False)
     
     def session_exists(self, session_id: str) -> bool:
         """检查会话是否存在"""
-        return session_id in self.active_sessions
+        return session_id in self.active_sessions or session_id in self.desktop_sessions
     
     async def close_session(self, session_id: str):
         """关闭会话"""
@@ -517,6 +539,9 @@ class CaptchaRemoteController:
                 worker.cancel()
             del self.active_sessions[session_id]
             logger.info(f"🔒 关闭远程控制会话: {session_id}")
+        if session_id in self.desktop_sessions:
+            del self.desktop_sessions[session_id]
+            logger.info(f"🔒 关闭官方页面桌面验证会话: {session_id}")
     
     async def auto_refresh_screenshot(self, session_id: str, interval: float = 1.0):
         """自动刷新截图（优化版：按需更新）"""
