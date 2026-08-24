@@ -33,10 +33,7 @@ jobs:
           hdiutil create -volname "鱼智云本地客户端" -srcfolder dist-desktop -ov -format UDZO release/FishCloudLocal.dmg
       - name: Package Windows application
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path release | Out-Null
-          Compress-Archive -Path 'dist-desktop/*' -DestinationPath 'release/FishCloudLocal-windows.zip'
+        run: python desktop/package_windows.py
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

@@ -22,7 +22,10 @@ def main() -> None:
         shutil.rmtree(DIST)
     command = [
         sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile',
-        '--name', '鱼智云本地客户端', '--paths', str(ROOT),
+        # Keep the generated filename ASCII-only.  GitHub's Windows runner
+        # and some unzip tools do not consistently preserve non-ASCII binary
+        # names, even though the application UI itself is fully Chinese.
+        '--name', 'FishCloudLocal', '--paths', str(ROOT),
         '--distpath', str(DIST), '--workpath', str(ROOT / 'build-desktop'),
         '--specpath', str(ROOT / 'build-desktop'),
     ]
