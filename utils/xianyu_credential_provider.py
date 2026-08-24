@@ -55,6 +55,7 @@ class LoginContext:
     device_id: str
     stage: AcquireStatus = AcquireStatus.API_AUTHENTICATED
     verification_url: Optional[str] = None
+    active_verification_url: Optional[str] = None
     remote_session_id: Optional[str] = None
     remote_control_url: Optional[str] = None
     verification_message: Optional[str] = None
@@ -134,6 +135,7 @@ class XianyuCredentialProvider:
         context.verification_page = None
         context.remote_session_id = None
         context.remote_control_url = None
+        context.active_verification_url = None
 
     async def start_official_verification(self, context: LoginContext) -> LoginContext:
         """在服务器保留原 Cookie 的浏览器中打开官方页，供用户手工操作。"""
@@ -146,7 +148,10 @@ class XianyuCredentialProvider:
         # 官方错误页时，才收集已有 Cookie 后重新建立。绝不能一边保留旧页
         # 一边新建浏览器，二者会变成不同会话。
         if context.remote_session_id and context.remote_control_url and context.verification_page:
-            if captcha_controller.session_exists(context.remote_session_id) and not captcha_controller.is_completed(context.remote_session_id):
+            # 闲鱼安全页携带一次性的挑战参数。重新取凭证后拿到的新地址
+            # 必须重新打开；继续展示旧窗口只会让用户看到“刷新后重试”。
+            same_challenge = context.active_verification_url == context.verification_url
+            if same_challenge and captcha_controller.session_exists(context.remote_session_id) and not captcha_controller.is_completed(context.remote_session_id):
                 return context
         if context.browser:
             await self._close_official_verification(context, preserve_cookie=True)
@@ -238,6 +243,7 @@ class XianyuCredentialProvider:
         context.browser_context = browser_context
         context.verification_page = page
         context.remote_session_id = session_id
+        context.active_verification_url = context.verification_url
         # 打开的是 noVNC 直连到同一 Chromium 窗口的入口。所有鼠标和滑动均
         # 由用户直接交给闲鱼官方页面，服务端不再转发或合成滑块轨迹。
         context.remote_control_url = f'/api/captcha/desktop/view/{session_id}'
@@ -297,6 +303,7 @@ class XianyuCredentialProvider:
                 current.remote_session_id = None
                 current.remote_control_url = None
                 current.verification_url = None
+                current.active_verification_url = None
                 current.verification_message = None
                 current.device_id = generate_device_id(xianyu_user_id)
             # 验证后的 Cookie 可能由官方页面刷新；只在传入新值时更新，不生成新设备。

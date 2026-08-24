@@ -7474,7 +7474,7 @@ async def resume_account_credential_acquire(account_id: str, current_user: Dict[
         return {
             'success': False,
             'status': result.status.value,
-            'message': verification_message or '官方验证尚未完成，请在闲鱼页面完成后再继续',
+            'message': verification_message or '上一轮官方验证未写回或已失效，已生成新的官方验证页面，请在新页面完成后再继续连接',
             'verification_url': result.context.verification_url if result.context else None,
             'remote_control_url': result.context.remote_control_url if result.context else None,
             'verification_message': verification_message,

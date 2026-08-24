@@ -15636,7 +15636,15 @@ function handleQRCodeSuccess(data) {
                     } else {
                         button.disabled = false;
                         button.innerHTML = `<i class="bi bi-arrow-repeat me-2"></i>${readyLabel}`;
-                        showToast(result.message || '验证尚未完成', 'warning');
+                        if (result.status === 'VERIFY_REQUIRED' && result.remote_control_url) {
+                            const verificationEntry = document.getElementById('openRemoteCaptchaControl');
+                            if (verificationEntry) {
+                                verificationEntry.href = result.remote_control_url;
+                            }
+                            showToast('已生成新的闲鱼官方验证页面，请重新打开该页面完成验证', 'info');
+                        } else {
+                            showToast(result.message || '验证尚未完成', 'warning');
+                        }
                     }
                 } catch (error) {
                     button.disabled = false;
