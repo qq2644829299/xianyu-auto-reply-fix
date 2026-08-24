@@ -457,11 +457,18 @@ def _start_api_server():
     host = os.getenv('API_HOST', '0.0.0.0')  # 默认绑定所有接口
     port = int(os.getenv('API_PORT', '8090'))  # 默认端口8090
 
-    # 如果配置文件中有特定配置，则使用配置文件
-    if 'host' in api_conf:
-        host = api_conf['host']
-    if 'port' in api_conf:
-        port = api_conf['port']
+    # 本地客户端不对局域网或公网开放管理入口。它只在用户电脑上提供
+    # localhost 服务，由桌面启动器自动打开；闲鱼登录和消息连接也留在本机。
+    local_client_mode = os.getenv('FISHCLOUD_LOCAL_CLIENT', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    if local_client_mode:
+        host = '127.0.0.1'
+        port = int(os.getenv('API_PORT', '18790'))
+    else:
+        # 如果配置文件中有特定配置，则使用配置文件
+        if 'host' in api_conf:
+            host = api_conf['host']
+        if 'port' in api_conf:
+            port = api_conf['port']
 
     # 兼容旧的URL配置方式
     if 'url' in api_conf and 'host' not in api_conf and 'port' not in api_conf:
