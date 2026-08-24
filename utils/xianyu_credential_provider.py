@@ -177,6 +177,7 @@ class XianyuCredentialProvider:
                 '--no-sandbox',
                 '--disable-dev-shm-usage',
                 '--window-size=1280,760',
+                '--lang=zh-CN',
             ],
         }
         # 生产镜像安装的是系统 Chromium，而非 Playwright 下载的浏览器包。
@@ -186,10 +187,11 @@ class XianyuCredentialProvider:
         browser = await playwright.chromium.launch(**launch_options)
         browser_context = await browser.new_context(
             viewport={'width': 1280, 'height': 760},
-            user_agent=(
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
-            ),
+            # 与部署地区保持一致，避免页面语言和时区与实际服务器环境相互矛盾。
+            # 不伪造浏览器型号或自动处理验证码；浏览器会如实使用自身版本信息。
+            locale='zh-CN',
+            timezone_id='Asia/Shanghai',
+            extra_http_headers={'Accept-Language': 'zh-CN,zh;q=0.9'},
         )
         # 验证地址可能跳转到 goofish、淘宝等官方域名。必须把当前会话 Cookie
         # 放进验证页实际使用的官方域名，否则用户在页面完成验证，恢复链路仍然
