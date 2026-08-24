@@ -634,6 +634,28 @@
   color: #fff;
 }
 
+.account-diagnostics-vnc-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.account-diagnostics-vnc-button {
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.account-diagnostics-vnc-button.is-primary {
+  background: var(--primary-color);
+}
+
+.account-diagnostics-vnc-button.is-primary:hover,
+.account-diagnostics-vnc-button.is-primary:focus {
+  background: var(--primary-hover);
+}
+
 /* 状态指标网格 */
 .account-diagnostics-status-grid {
   display: grid;

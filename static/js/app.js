@@ -1060,6 +1060,59 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
     };
 }
 
+// 官方验证只能由用户在闲鱼页面完成。此按钮只恢复原有的凭证获取请求，
+// 不重新扫码、不创建新设备，也不自动操作滑块。
+async function resumeAccountCredentialAcquire(accountId, button = null) {
+    const normalizedAccountId = String(accountId || '').trim();
+    if (!normalizedAccountId) {
+        showToast('没有找到要继续连接的账号', 'warning');
+        return;
+    }
+
+    const originalHtml = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>正在继续连接…';
+    }
+
+    try {
+        const response = await fetch(`${apiBase}/account-credential/${encodeURIComponent(normalizedAccountId)}/resume`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${authToken}` },
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(result.detail || result.message || '继续连接请求失败');
+        }
+        if (result.success) {
+            showToast('验证结果已确认，正在建立业务连接', 'success');
+            await loadAccounts();
+            if (typeof loadAboutDiagnostics === 'function') {
+                await loadAboutDiagnostics();
+            }
+            return;
+        }
+
+        if (result.status === 'VERIFY_REQUIRED') {
+            showToast(result.message || '当前官方验证尚未通过，请在新页面完成验证后再继续', 'warning');
+            await loadAccounts();
+            if (typeof loadAboutDiagnostics === 'function') {
+                await loadAboutDiagnostics();
+            }
+            return;
+        }
+        showToast(result.message || '暂时无法继续连接', 'warning');
+    } catch (error) {
+        console.error('继续获取闲鱼连接凭证失败:', error);
+        showToast(error.message || '继续连接失败，请稍后重试', 'danger');
+    } finally {
+        if (button && document.body.contains(button)) {
+            button.disabled = false;
+            button.innerHTML = originalHtml;
+        }
+    }
+}
+
 function buildManualInterventionAlert(statusNote, runtimeStatus, options = {}) {
     const alert = getManualInterventionAlert(statusNote, runtimeStatus);
     if (!alert) {
@@ -1077,6 +1130,12 @@ function buildManualInterventionAlert(statusNote, runtimeStatus, options = {}) {
                 <div class="manual-intervention-alert-detail">${escapeHtml(alert.detail)}</div>
             </div>
             <div class="manual-intervention-alert-actions">
+            ${runtimeStatus?.credential_verification_required && options.accountId ? `
+                <button type="button" class="manual-intervention-alert-action is-primary" data-account-id="${escapeHtml(options.accountId)}" onclick="event.stopPropagation();resumeAccountCredentialAcquire(this.dataset.accountId, this);">
+                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                    我已完成验证，继续连接
+                </button>
+            ` : ''}
             ${options.accountId ? `
                 <button type="button" class="manual-intervention-alert-action" data-account-id="${escapeHtml(options.accountId)}" data-has-credentials="${options.hasCredentials ? 'true' : 'false'}" onclick="event.stopPropagation();goToAccountRecovery(this.dataset.accountId, this.dataset.hasCredentials === 'true');">
                     <i class="bi bi-tools" aria-hidden="true"></i>
@@ -4562,7 +4621,7 @@ function buildAboutReadinessValue(items, runtimeStatus = null) {
     `;
 }
 
-function buildAboutVncAccessPanel(runtimeStatus) {
+function buildAboutVncAccessPanel(runtimeStatus, accountId = '') {
     const verificationUrl = getOfficialVerificationUrl(runtimeStatus);
     if (!verificationUrl) {
         return '';
@@ -4580,10 +4639,18 @@ function buildAboutVncAccessPanel(runtimeStatus) {
                 </div>
                 <div class="account-diagnostics-vnc-url">${escapeHtml(verificationUrl)}</div>
             </div>
-            <a class="account-diagnostics-vnc-button" href="${escapeHtml(verificationUrl)}" target="_blank" rel="noopener">
-                <i class="bi bi-box-arrow-up-right"></i>
-                打开闲鱼官方验证页面
-            </a>
+            <div class="account-diagnostics-vnc-actions">
+                <a class="account-diagnostics-vnc-button" href="${escapeHtml(verificationUrl)}" target="_blank" rel="noopener">
+                    <i class="bi bi-box-arrow-up-right"></i>
+                    打开闲鱼官方验证页面
+                </a>
+                ${accountId ? `
+                    <button type="button" class="account-diagnostics-vnc-button is-primary" data-account-id="${escapeHtml(accountId)}" onclick="resumeAccountCredentialAcquire(this.dataset.accountId, this);">
+                        <i class="bi bi-arrow-repeat"></i>
+                        我已完成验证，继续连接
+                    </button>
+                ` : ''}
+            </div>
         </div>
     `;
 }
@@ -4743,7 +4810,7 @@ function renderAboutRuntimeStatus(runtimeStatus) {
                 accountId: selectedAccount?.id || '',
                 hasCredentials: Boolean(selectedAccount?.username) && Boolean(selectedAccount?.has_password),
             })}
-            ${buildAboutVncAccessPanel(runtimeStatus)}
+            ${buildAboutVncAccessPanel(runtimeStatus, selectedAccount?.id || '')}
             <div class="account-diagnostics-status-body">
                 <div class="account-diagnostics-status-primary">
                     <div class="account-diagnostics-status-grid">
