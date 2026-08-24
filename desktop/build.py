@@ -21,7 +21,7 @@ def main() -> None:
     if DIST.exists():
         shutil.rmtree(DIST)
     command = [
-        sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile',
+        sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
         # Keep the generated filename ASCII-only.  GitHub's Windows runner
         # and some unzip tools do not consistently preserve non-ASCII binary
         # names, even though the application UI itself is fully Chinese.
@@ -30,7 +30,12 @@ def main() -> None:
         '--specpath', str(ROOT / 'build-desktop'),
     ]
     if platform.system() == 'Darwin':
-        command.append('--windowed')
+        # An app bundle is the normal macOS delivery format.  Building a
+        # directory bundle also prevents the raw helper executable from being
+        # shown next to the application in the DMG.
+        command.extend(['--onedir', '--windowed'])
+    else:
+        command.append('--onefile')
     for source, destination in [
         ('static', 'static'),
         ('global_config.yml', '.'),

@@ -11,7 +11,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-latest
+          # macos-13 is GitHub's Intel runner.  The current customer machine
+          # is an Intel MacBook Pro and cannot run an Apple-silicon build.
+          - os: macos-13
             artifact: fishcloud-local-macos
           - os: windows-latest
             artifact: fishcloud-local-windows
