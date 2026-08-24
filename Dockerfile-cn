@@ -42,6 +42,7 @@ RUN apt-get update && \
         libfreetype6-dev \
         fonts-dejavu-core \
         fonts-liberation \
+        fonts-noto-cjk \
         # Playwright浏览器依赖
         libnss3 \
         libnspr4 \
