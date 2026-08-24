@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import platform
+import os
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,10 @@ def main() -> None:
         # An app bundle is the normal macOS delivery format.  Building a
         # directory bundle also prevents the raw helper executable from being
         # shown next to the application in the DMG.
-        command.extend(['--onedir', '--windowed'])
+        command.append('--onedir')
+        # 只供本地打包排查使用；正式应用保持无终端窗口的普通桌面体验。
+        if not os.getenv('FISHCLOUD_CONSOLE_BUILD'):
+            command.append('--windowed')
     else:
         command.append('--onefile')
     for source, destination in [
@@ -48,6 +52,8 @@ def main() -> None:
         '--collect-submodules', 'uvicorn',
         '--collect-submodules', 'playwright',
         '--hidden-import', 'Start',
+        # Start.py 通过字符串启动该服务，静态分析无法自动发现它。
+        '--hidden-import', 'reply_server',
         str(ROOT / 'desktop_launcher.py'),
     ])
     subprocess.run(command, check=True, cwd=ROOT)

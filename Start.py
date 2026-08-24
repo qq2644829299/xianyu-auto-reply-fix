@@ -161,6 +161,32 @@ def _check_and_install_playwright():
     except ImportError:
         print(f"{_WARN} Playwright模块未安装，跳过浏览器检查")
         return False
+
+    def _run_playwright_install():
+        """安装 Chromium；冻结后的桌面程序不能再次用自身执行 -m playwright。"""
+        import subprocess
+
+        creation_flags = 0
+        if sys.platform == 'win32' and hasattr(subprocess, 'CREATE_NO_WINDOW'):
+            creation_flags = subprocess.CREATE_NO_WINDOW
+
+        command = [sys.executable, '-m', 'playwright', 'install', 'chromium']
+        if getattr(sys, 'frozen', False):
+            driver_dir = Path(playwright.__file__).resolve().parent / 'driver'
+            node = driver_dir / ('node.exe' if sys.platform == 'win32' else 'node')
+            cli = driver_dir / 'package' / 'cli.js'
+            if node.exists() and cli.exists():
+                command = [str(node), str(cli), 'install', 'chromium']
+            else:
+                raise RuntimeError('本地客户端缺少 Playwright 安装程序')
+
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            creationflags=creation_flags,
+        )
     
     # 检查Playwright浏览器是否存在
     playwright_installed = False
@@ -336,13 +362,7 @@ def _check_and_install_playwright():
                 if sys.platform == 'win32' and hasattr(subprocess, 'CREATE_NO_WINDOW'):
                     creation_flags = subprocess.CREATE_NO_WINDOW
                 
-                result = subprocess.run(
-                    [sys.executable, '-m', 'playwright', 'install', 'chromium'],
-                    capture_output=True,
-                    text=True,
-                    timeout=600,  # 10分钟超时
-                    creationflags=creation_flags
-                )
+                result = _run_playwright_install()
                 
                 if result.returncode == 0:
                     print(f"{_OK} Playwright浏览器安装成功")
@@ -364,13 +384,7 @@ def _check_and_install_playwright():
                 if sys.platform == 'win32' and hasattr(subprocess, 'CREATE_NO_WINDOW'):
                     creation_flags = subprocess.CREATE_NO_WINDOW
                 
-                result = subprocess.run(
-                    [sys.executable, '-m', 'playwright', 'install', 'chromium'],
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    creationflags=creation_flags
-                )
+                result = _run_playwright_install()
                 
                 if result.returncode == 0:
                     print(f"{_OK} Playwright浏览器安装成功（通过命令行）")
@@ -386,13 +400,7 @@ def _check_and_install_playwright():
             except ImportError:
                 # 如果playwright模块不可用，尝试使用subprocess
                 import subprocess
-                result = subprocess.run(
-                    [sys.executable, '-m', 'playwright', 'install', 'chromium'],
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' and hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-                )
+                result = _run_playwright_install()
                 
                 if result.returncode == 0:
                     print(f"{_OK} Playwright浏览器安装成功")
