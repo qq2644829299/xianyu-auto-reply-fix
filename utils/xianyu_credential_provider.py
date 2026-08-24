@@ -222,15 +222,22 @@ class XianyuCredentialProvider:
                 target_host or 'unknown',
                 'headful' if headful_enabled else 'headless',
             )
-            # 先打开闲鱼 IM 正页。用户贴出的官方页面正是在这里以 baxia
-            # 官方弹层展示安全校验；不再把滑块截图出来放到自制画布里操作。
-            # 如果官方页没有接住本次校验，再回到它下发的原始验证地址。
-            official_im_url = 'https://www.goofish.com/im'
-            # 闲鱼 IM 首页会持续加载长连接资源，在服务器上等待 DOM 完整加载会
-            # 无意义地卡住认证流程。导航一提交就已具备正确的官方来源；随后由
-            # 浏览器在该同一会话发 token 请求即可。
-            await page.goto(official_im_url, wait_until='commit', timeout=10000)
-            await page.wait_for_timeout(500)
+            # 直接进入与 token 接口同源的官方入口。IM 首页会长期加载消息资源，
+            # 服务器浏览器等待该页会卡住；这里不需要等首页，只需先取得 h5api
+            # 官方来源，再由该浏览器发起本次凭证请求。
+            official_api_origin = 'https://h5api.m.goofish.com/'
+            try:
+                await asyncio.wait_for(
+                    page.goto(official_api_origin, wait_until='commit', timeout=10000),
+                    timeout=12,
+                )
+            except Exception as navigation_error:
+                logger.warning('官方验证来源页打开超时，改用本次官方挑战入口: {}', navigation_error)
+                await asyncio.wait_for(
+                    page.goto(context.verification_url, wait_until='commit', timeout=10000),
+                    timeout=12,
+                )
+            await page.wait_for_timeout(300)
             # 让官方浏览器本身发起 IM token 请求，安全验证会绑定到用户眼前的
             # 这一个页面，而非早先后台 HTTP 请求下发的一次性挑战链接。
             try:
