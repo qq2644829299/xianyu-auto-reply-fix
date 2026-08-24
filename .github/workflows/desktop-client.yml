@@ -39,6 +39,8 @@ jobs:
           # compression pass keeps Intel builds from spending many minutes at
           # the final packaging step.
           hdiutil create -volname "鱼智云本地客户端" -srcfolder dist-desktop -ov -format UDRO release/FishCloudLocal.dmg
+          hdiutil verify release/FishCloudLocal.dmg
+          ls -lh release/FishCloudLocal.dmg
       - name: Package Windows application
         if: runner.os == 'Windows'
         run: python desktop/package_windows.py
@@ -46,3 +48,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: release/
+          # The macOS installer is already a disk image.  Re-compressing a
+          # large DMG inside the artifact adds several minutes and has been
+          # the source of stalled Mac packaging runs.  Preserve it as-is.
+          compression-level: 0
