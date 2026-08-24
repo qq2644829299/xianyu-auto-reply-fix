@@ -973,9 +973,16 @@ function renderStatusNoteBadge(statusNote, className) {
     `;
 }
 
-function getNoVncUrl() {
-    const hostname = window.location.hostname || 'localhost';
-    return `http://${hostname}:6080/vnc.html?autoconnect=1&resize=scale`;
+function getOfficialVerificationUrl(runtimeStatus) {
+    const path = String(runtimeStatus?.credential_remote_control_url || '').trim();
+    if (!path) {
+        return '';
+    }
+    try {
+        return new URL(path, window.location.origin).href;
+    } catch (_error) {
+        return '';
+    }
 }
 
 function isVncManualActionAvailable(runtimeStatus) {
@@ -1002,7 +1009,9 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
     const tokenStatus = String(runtimeStatus?.token_refresh_status || '').trim();
     const tokenError = String(runtimeStatus?.token_refresh_error_message || '').trim();
     const combinedText = `${noteText} ${tokenStatus} ${tokenError}`;
-    const vncAvailable = isVncManualActionAvailable(runtimeStatus);
+    const verificationUrl = getOfficialVerificationUrl(runtimeStatus);
+    const verificationRequired = runtimeStatus?.credential_verification_required === true;
+    const vncAvailable = Boolean(verificationUrl) || isVncManualActionAvailable(runtimeStatus);
     const manualStatuses = new Set([
         'account_risk_protected',
         'manual_verification_required',
@@ -1014,7 +1023,8 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
         'token_refresh_exception',
     ]);
     const manualKeywords = ['滑块', '风控', '验证码', '验证', '账号存在风险', '拦截', '客户端登录'];
-    const needsIntervention = Boolean(noteText)
+    const needsIntervention = verificationRequired
+        || Boolean(noteText)
         || manualStatuses.has(tokenStatus)
         || manualKeywords.some(keyword => combinedText.includes(keyword));
 
@@ -1023,14 +1033,18 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
     }
 
     let title = noteText || '检测到滑块/风控，需要人工处理';
-    if (!noteText && tokenStatus === 'password_login_backoff_wait') {
+    if (verificationRequired) {
+        title = '等待完成闲鱼官方验证';
+    } else if (!noteText && tokenStatus === 'password_login_backoff_wait') {
         title = '登录恢复退避中，暂不可接管';
     } else if (!noteText && tokenStatus === 'captcha_max_retries_exceeded') {
         title = vncAvailable ? '滑块自动处理失败，需要人工接管' : '滑块自动处理失败，需重新发起恢复';
     }
 
     let detail = tokenError || '系统检测到认证链路异常。';
-    if (vncAvailable) {
+    if (verificationRequired) {
+        detail = runtimeStatus?.credential_verification_message || '请打开闲鱼官方验证页面，完成验证后系统会继续获取连接凭证。';
+    } else if (vncAvailable) {
         detail = tokenError || '当前存在可接管的浏览器流程，请通过远程桌面完成滑块、扫码、人脸或其他风控验证。';
     } else if (tokenStatus === 'password_login_backoff_wait') {
         detail = tokenError || '当前处于失败退避等待。请重新发起账号恢复，或等待退避结束后再试。';
@@ -1041,8 +1055,8 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
     return {
         title,
         detail,
-        vncUrl: getNoVncUrl(),
-        vncAvailable,
+        verificationUrl,
+        vncAvailable: Boolean(verificationUrl),
     };
 }
 
@@ -1070,9 +1084,9 @@ function buildManualInterventionAlert(statusNote, runtimeStatus, options = {}) {
                 </button>
             ` : ''}
             ${alert.vncAvailable ? `
-                <a class="manual-intervention-alert-action" href="${escapeHtml(alert.vncUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation();">
+                <a class="manual-intervention-alert-action" href="${escapeHtml(alert.verificationUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation();">
                     <i class="bi bi-display" aria-hidden="true"></i>
-                    打开远程桌面
+                    打开闲鱼官方验证页面
                 </a>
             ` : ''}
             </div>
@@ -4497,7 +4511,7 @@ function buildAboutRuntimeMetaItem(label, value) {
     `;
 }
 
-function buildAboutReadinessValue(items) {
+function buildAboutReadinessValue(items, runtimeStatus = null) {
     const normalizedItems = Array.isArray(items) ? items : [];
     const totalCount = normalizedItems.length;
     const readyCount = normalizedItems.filter(item => item.ready).length;
@@ -4509,7 +4523,9 @@ function buildAboutReadinessValue(items) {
         .map(item => item.label);
 
     let summaryNote = '暂无链路状态';
-    if (totalCount > 0 && pendingLabels.length === 0) {
+    if (runtimeStatus?.credential_verification_required) {
+        summaryNote = '已完成扫码，正在等待完成闲鱼官方验证';
+    } else if (totalCount > 0 && pendingLabels.length === 0) {
         summaryNote = '四条关键链路均已就绪';
     } else if (totalCount > 0 && pendingLabels.length === totalCount) {
         summaryNote = '四条关键链路均未就绪';
@@ -4547,27 +4563,26 @@ function buildAboutReadinessValue(items) {
 }
 
 function buildAboutVncAccessPanel(runtimeStatus) {
-    if (!isVncManualActionAvailable(runtimeStatus)) {
+    const verificationUrl = getOfficialVerificationUrl(runtimeStatus);
+    if (!verificationUrl) {
         return '';
     }
-
-    const vncUrl = getNoVncUrl();
 
     return `
         <div class="account-diagnostics-vnc-panel">
             <div class="account-diagnostics-vnc-copy">
                 <div class="account-diagnostics-vnc-title">
                     <i class="bi bi-display"></i>
-                    <span>当前可通过远程桌面接管</span>
+                    <span>当前可打开闲鱼官方验证页面</span>
                 </div>
                 <div class="account-diagnostics-vnc-desc">
-                    系统检测到正在运行的有头浏览器认证流程，此时在远程桌面中处理滑块/风控才会被后端继续检测并写回状态。
+                    请在该页面完成闲鱼官方要求的滑块、扫码、人脸或其他验证；完成后回到本页继续连接。
                 </div>
-                <div class="account-diagnostics-vnc-url">${escapeHtml(vncUrl)}</div>
+                <div class="account-diagnostics-vnc-url">${escapeHtml(verificationUrl)}</div>
             </div>
-            <a class="account-diagnostics-vnc-button" href="${escapeHtml(vncUrl)}" target="_blank" rel="noopener">
+            <a class="account-diagnostics-vnc-button" href="${escapeHtml(verificationUrl)}" target="_blank" rel="noopener">
                 <i class="bi bi-box-arrow-up-right"></i>
-                打开远程桌面
+                打开闲鱼官方验证页面
             </a>
         </div>
     `;
@@ -4627,6 +4642,13 @@ function renderAboutHistoryPlaceholder(title, subtitle) {
 }
 
 function getAboutRuntimeOverview(runtimeStatus, readinessCount = 0) {
+    if (runtimeStatus?.credential_verification_required) {
+        return {
+            tone: 'warning',
+            title: '等待完成闲鱼官方验证',
+            note: '扫码已成功；完成官方验证后，系统会在当前登录状态下继续建立业务连接。',
+        };
+    }
     if (!runtimeStatus?.running) {
         return {
             tone: 'danger',
@@ -4768,7 +4790,7 @@ function renderAboutRuntimeStatus(runtimeStatus) {
                 <div class="account-diagnostics-status-sidebar">
                     ${buildAboutRuntimeStatusItem({
                         label: '链路就绪情况',
-                        value: buildAboutReadinessValue(readinessSignalItems),
+                            value: buildAboutReadinessValue(readinessSignalItems, runtimeStatus),
                         tone: readinessTone,
                         richValue: true,
                         accent: 'readiness',

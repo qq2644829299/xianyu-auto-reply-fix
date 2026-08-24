@@ -4287,6 +4287,8 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         'manual_browser_reason': None,
         'credential_acquire_status': 'LOGIN_REQUIRED',
         'credential_verification_required': False,
+        'credential_remote_control_url': None,
+        'credential_verification_message': None,
     }
     if not cleaned_cid:
         return runtime_status
@@ -4296,6 +4298,8 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
     runtime_status['credential_verification_required'] = (
         runtime_status['credential_acquire_status'] == AcquireStatus.VERIFY_REQUIRED.value
     )
+    runtime_status['credential_remote_control_url'] = credential_state.get('remote_control_url')
+    runtime_status['credential_verification_message'] = credential_state.get('verification_message')
 
     live_instance = None
     try:
