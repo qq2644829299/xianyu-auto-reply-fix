@@ -51,7 +51,10 @@ def main() -> None:
         str(ROOT / 'desktop_launcher.py'),
     ])
     subprocess.run(command, check=True, cwd=ROOT)
-    print(f'本地客户端已构建到: {DIST}')
+    # GitHub's Windows terminal uses a legacy encoding.  Keep build output
+    # ASCII-only so a successful EXE build is never marked as failed merely
+    # while printing its location.
+    print(f'Local client built at: {DIST}')
 
 
 if __name__ == '__main__':
