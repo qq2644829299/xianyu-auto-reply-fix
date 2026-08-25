@@ -1403,7 +1403,9 @@ class XianyuLive:
                     f"【{self.cookie_id}】四条关键链路已就绪，开始自动同步全部商品"
                     f"（第 {attempt}/3 次）"
                 )
-                result = await self.get_all_items(sync_item_details=True)
+                # 首次接入先完整同步商品列表。逐件抓取详情会在商品较多时让
+                # 列表长期不完整；详情保留给原有的手动/按需同步流程处理。
+                result = await self.get_all_items(sync_item_details=False)
                 if result.get("success") and not result.get("error"):
                     self.initial_product_sync_completed = True
                     logger.success(
