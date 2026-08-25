@@ -3031,6 +3031,35 @@ class XianyuLive:
             logger.error(f"【{self.cookie_id}】基础订单预入库异常: {self._safe_str(e)}")
             return False
 
+    def _is_fast_direct_card_delivery(self, item_id: str) -> bool:
+        """普通商品直接绑定普通卡券时，无需在消息主链同步读取订单详情。
+
+        订单详情页读取会占用消息处理队列数秒；付款通知在队列中连续到达时，
+        这会把本可直接发货的订单排到很后面。多规格商品仍必须读取详情，
+        因此不走这个快速分支。
+        """
+        normalized_item_id = str(item_id or '').strip()
+        if not normalized_item_id or normalized_item_id.startswith('auto_'):
+            return False
+
+        try:
+            bound_card = db_manager.get_item_delivery_card(
+                self.cookie_id,
+                normalized_item_id,
+                user_id=self.user_id,
+            )
+            return bool(
+                bound_card
+                and not db_manager.get_item_multi_spec_status(self.cookie_id, normalized_item_id)
+                and not bound_card.get('is_multi_spec')
+            )
+        except Exception as fast_path_error:
+            logger.warning(
+                f"【{self.cookie_id}】检查普通卡券快速发货条件失败，按常规流程处理: "
+                f"{self._safe_str(fast_path_error)}"
+            )
+            return False
+
     async def _retry_order_detail_after_delay(self, order_id: str, item_id: str = None, buyer_id: str = None,
                                               sid: str = None, buyer_nick: str = None, delay_seconds: int = 30,
                                               buyer_id_source: str = None):
@@ -16562,6 +16591,8 @@ class XianyuLive:
 
             # 【优先处理】尝试获取订单ID并获取订单详情
             order_id = None
+            # 仅普通商品直接绑定卡券时为 True。该类订单不应被详情页抓取阻塞。
+            fast_direct_delivery = False
             try:
                 logger.info(f"【{self.cookie_id}】[{msg_id}] 🔍 开始提取订单ID，消息类型: {type(message)}")
                 order_id = self._extract_order_id(message, message_data)
@@ -16607,21 +16638,52 @@ class XianyuLive:
                         buyer_id_source=temp_user_id_source,
                     )
 
-                    # 立即获取订单详情信息
-                    try:
-                        # 调用订单详情获取方法（传入sid和buyer_nick用于保存到数据库）
-                        order_detail = await self.fetch_order_detail_info(
-                            order_id,
-                            temp_item_id,
-                            temp_user_id,
-                            sid=temp_sid,
-                            buyer_nick=temp_buyer_nick,
-                            buyer_id_source=temp_user_id_source,
+                    fast_direct_delivery = self._is_fast_direct_card_delivery(temp_item_id)
+                    if fast_direct_delivery:
+                        # 直接绑定的普通卡券无需订单详情才能安全发送。把详情同步移出
+                        # 消息主链，避免同一订单的多条系统通知将付款卡片排队数十秒。
+                        logger.info(
+                            f'[{msg_time}] 【{self.cookie_id}】⚡ 普通卡券订单进入快速发货队列，'
+                            f'跳过同步订单详情读取: {order_id}'
                         )
-                        if order_detail:
-                            logger.info(f'[{msg_time}] 【{self.cookie_id}】✅ 订单详情获取成功: {order_id}')
-                        else:
-                            logger.warning(f'[{msg_time}] 【{self.cookie_id}】⚠️ 订单详情获取失败: {order_id}')
+                        if basic_order_saved:
+                            self._schedule_order_detail_retry(
+                                order_id,
+                                item_id=temp_item_id,
+                                buyer_id=temp_user_id,
+                                sid=temp_sid,
+                                buyer_nick=temp_buyer_nick,
+                                delay_seconds=15,
+                                buyer_id_source=temp_user_id_source,
+                            )
+                    else:
+                        # 多规格或未绑定商品仍立即读取详情，确保规格和发货规则准确。
+                        try:
+                            order_detail = await self.fetch_order_detail_info(
+                                order_id,
+                                temp_item_id,
+                                temp_user_id,
+                                sid=temp_sid,
+                                buyer_nick=temp_buyer_nick,
+                                buyer_id_source=temp_user_id_source,
+                            )
+                            if order_detail:
+                                logger.info(f'[{msg_time}] 【{self.cookie_id}】✅ 订单详情获取成功: {order_id}')
+                            else:
+                                logger.warning(f'[{msg_time}] 【{self.cookie_id}】⚠️ 订单详情获取失败: {order_id}')
+                                if basic_order_saved:
+                                    self._schedule_order_detail_retry(
+                                        order_id,
+                                        item_id=temp_item_id,
+                                        buyer_id=temp_user_id,
+                                        sid=temp_sid,
+                                        buyer_nick=temp_buyer_nick,
+                                        delay_seconds=30,
+                                        buyer_id_source=temp_user_id_source,
+                                    )
+
+                        except Exception as detail_e:
+                            logger.error(f'[{msg_time}] 【{self.cookie_id}】❌ 获取订单详情异常: {self._safe_str(detail_e)}')
                             if basic_order_saved:
                                 self._schedule_order_detail_retry(
                                     order_id,
@@ -16632,19 +16694,6 @@ class XianyuLive:
                                     delay_seconds=30,
                                     buyer_id_source=temp_user_id_source,
                                 )
-
-                    except Exception as detail_e:
-                        logger.error(f'[{msg_time}] 【{self.cookie_id}】❌ 获取订单详情异常: {self._safe_str(detail_e)}')
-                        if basic_order_saved:
-                            self._schedule_order_detail_retry(
-                                order_id,
-                                item_id=temp_item_id,
-                                buyer_id=temp_user_id,
-                                sid=temp_sid,
-                                buyer_nick=temp_buyer_nick,
-                                delay_seconds=30,
-                                buyer_id_source=temp_user_id_source,
-                            )
                 else:
                     logger.warning(f"【{self.cookie_id}】[{msg_id}] 未检测到订单ID")
             except Exception as e:
@@ -17288,7 +17337,9 @@ class XianyuLive:
                     logger.error(f"订单状态处理失败: {self._safe_str(e)}")
 
             # 关键状态消息到达时，按需补刷一次订单详情，避免缓存把状态留在旧值
-            if order_id and order_status_signal in {'pending_ship', 'shipped', 'completed', 'cancelled', 'refunding'}:
+            if order_id and order_status_signal in {'pending_ship', 'shipped', 'completed', 'cancelled', 'refunding'} and not (
+                fast_direct_delivery and order_status_signal == 'pending_ship'
+            ):
                 try:
                     refresh_sid = ''
                     if isinstance(message_1, dict):
@@ -17309,6 +17360,10 @@ class XianyuLive:
                     logger.error(
                         f"【{self.cookie_id}】[{msg_id}] 状态消息触发订单详情补刷失败: {self._safe_str(refresh_e)}"
                     )
+            elif order_id and fast_direct_delivery and order_status_signal == 'pending_ship':
+                logger.info(
+                    f"【{self.cookie_id}】[{msg_id}] ⚡ 普通卡券付款通知跳过同步状态补刷，立即继续发货"
+                )
 
             # 【优先处理】检查系统消息和自动发货触发消息（不受人工接入暂停影响）
             fallback_ignore_keywords = [
