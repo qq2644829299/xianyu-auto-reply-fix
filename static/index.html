@@ -957,11 +957,11 @@
               </div>
 
               <div class="col-md-6 text-md-end">
-                <span class="text-muted small">勾选下方商品后，可批量更新详情</span>
+                <span class="text-muted small">未勾选商品时，“从闲鱼同步”会同步新增商品</span>
               </div>
             </div>
 
-            <p class="text-muted small mb-0">“从闲鱼同步”只更新已勾选商品的标题、描述、图片和价格，不会修改闲鱼上的商品。</p>
+            <p class="text-muted small mb-0">勾选商品后，“从闲鱼同步”只更新所选商品的标题、描述、图片和价格；未勾选时会同步账号的新增商品，不会修改闲鱼上的商品。</p>
 
           </div>
         </div>
@@ -975,7 +975,7 @@
               <h5 class="mb-0">商品列表</h5>
             </div>
             <div class="d-flex gap-2">
-              <button class="btn btn-sm btn-primary" onclick="syncSelectedItemsFromXianyu(this)" id="batchSyncItemsBtn" disabled>
+              <button class="btn btn-sm btn-primary" onclick="syncSelectedItemsFromXianyu(this)" id="batchSyncItemsBtn">
                 <i class="bi bi-cloud-download me-1"></i>从闲鱼同步
               </button>
               <button class="btn btn-sm btn-outline-danger" onclick="batchDeleteItems()" id="batchDeleteBtn" disabled>

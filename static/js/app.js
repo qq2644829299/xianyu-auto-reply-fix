@@ -12804,7 +12804,9 @@ async function refreshItems() {
 
 async function syncSelectedItemsFromXianyu(button) {
     const selected = Array.from(document.querySelectorAll('input[name="itemCheckbox"]:checked'));
-    if (!selected.length) return showToast('请先勾选需要同步的商品', 'warning');
+    if (!selected.length) {
+        return syncNewItemsFromXianyu(button);
+    }
     const groups = new Map();
     selected.forEach(input => {
         const list = groups.get(input.dataset.cookieId) || [];
@@ -12839,6 +12841,52 @@ async function syncSelectedItemsFromXianyu(button) {
         showToast(`已从闲鱼同步：成功 ${success} 件${failed ? `，失败 ${failed} 件` : ''}`, failed ? 'warning' : 'success');
     } catch (error) {
         showToast(error.message || '从闲鱼同步失败', 'danger');
+    } finally {
+        button.disabled = false;
+        button.innerHTML = original;
+        updateBatchDeleteButton();
+    }
+}
+
+async function syncNewItemsFromXianyu(button) {
+    const selectedAccountId = document.getElementById('itemCookieFilter')?.value || '';
+    const original = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>正在同步新增商品';
+
+    try {
+        let accountIds = selectedAccountId ? [selectedAccountId] : [];
+        if (!accountIds.length) {
+            const accounts = await fetchWorkspaceJson('/cookies/details', { force: true });
+            accountIds = (accounts || [])
+                .filter(account => account.enabled !== false && account.id)
+                .map(account => account.id);
+        }
+        if (!accountIds.length) throw new Error('没有可同步的账号');
+
+        const results = [];
+        const failures = [];
+        for (const cookieId of accountIds) {
+            const response = await fetch(`${apiBase}/items/get-all-from-account`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+                body: JSON.stringify({ cookie_id: cookieId })
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (response.ok && payload.success) results.push(payload);
+            else failures.push(`${cookieId}: ${payload.message || '同步失败'}`);
+        }
+
+        invalidateWorkspaceCache('/items');
+        await refreshItemsData();
+        const total = results.reduce((sum, result) => sum + Number(result.total_count || 0), 0);
+        if (failures.length) {
+            showToast(`已同步 ${total} 件商品；${failures.join('；')}`, results.length ? 'warning' : 'danger');
+        } else {
+            showToast(`新增商品同步完成，当前共 ${total} 件`, 'success');
+        }
+    } catch (error) {
+        showToast(error.message || '同步新增商品失败', 'danger');
     } finally {
         button.disabled = false;
         button.innerHTML = original;
@@ -12906,7 +12954,7 @@ async function getAllItemsFromAccount() {
 }
 
 // 获取所有页商品信息
-async function getAllItemsFromAccountAll() {
+async function getAllItemsFromAccountAll(button) {
     const cookieSelect = document.getElementById('itemCookieFilter');
     const selectedCookieId = cookieSelect.value;
 
@@ -12916,10 +12964,14 @@ async function getAllItemsFromAccountAll() {
     }
 
     // 显示加载状态
-    const button = event.target;
-    const originalText = button.innerHTML;
-    button.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>同步中...';
-    button.disabled = true;
+    const triggerButton = button || window.event?.currentTarget || window.event?.target;
+    if (!triggerButton) {
+        showToast('无法确定同步按钮，请刷新页面后重试', 'danger');
+        return;
+    }
+    const originalText = triggerButton.innerHTML;
+    triggerButton.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>正在同步全部商品';
+    triggerButton.disabled = true;
 
     try {
     const response = await fetch(`${apiBase}/items/get-all-from-account`, {
@@ -12937,8 +12989,8 @@ async function getAllItemsFromAccountAll() {
         const data = await response.json();
         if (data.success) {
         const message = data.total_pages ?
-            `成功同步 ${data.total_count} 个商品（共${data.total_pages}页），最新详情已更新` :
-            `成功同步商品信息，最新详情已更新`;
+            `已同步 ${data.total_count} 个闲鱼商品（共${data.total_pages}页）` :
+            `闲鱼商品已同步`;
         showToast(message, 'success');
         invalidateWorkspaceCache('/items');
         // 刷新商品列表（保持筛选器选择）
@@ -12954,8 +13006,8 @@ async function getAllItemsFromAccountAll() {
     showToast('同步商品信息失败', 'danger');
     } finally {
     // 恢复按钮状态
-    button.innerHTML = originalText;
-    button.disabled = false;
+    triggerButton.innerHTML = originalText;
+    triggerButton.disabled = false;
     }
 }
 
@@ -13181,8 +13233,8 @@ function updateBatchDeleteButton() {
     } else {
     batchDeleteBtn.disabled = true;
     if (batchSyncBtn) {
-        batchSyncBtn.disabled = true;
-        batchSyncBtn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>从闲鱼同步';
+        batchSyncBtn.disabled = false;
+        batchSyncBtn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>同步新增商品';
     }
     batchDeleteBtn.innerHTML = '<i class="bi bi-trash"></i> 批量删除';
     }
