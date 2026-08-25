@@ -1374,6 +1374,61 @@ class XianyuLive:
             else:
                 logger.info(state_msg)
 
+    def _start_initial_product_sync(self):
+        """在账号真正在线后，后台同步该账号的全部在售商品。"""
+        if self.initial_product_sync_completed:
+            return
+        if self.initial_product_sync_task and not self.initial_product_sync_task.done():
+            return
+
+        self.initial_product_sync_task = asyncio.create_task(
+            self._sync_all_products_after_online(),
+            name=f"initial-product-sync-{self.cookie_id}",
+        )
+        self.background_tasks.add(self.initial_product_sync_task)
+        self.initial_product_sync_task.add_done_callback(self.background_tasks.discard)
+
+    async def _sync_all_products_after_online(self):
+        """等待连接稳定后同步全部商品，并为短暂接口失败做有限重试。"""
+        # 确保商品接口使用当前已验证的连接上下文，不阻塞消息连接。
+        await asyncio.sleep(2)
+
+        for attempt in range(1, 4):
+            if self.connection_state != ConnectionState.CONNECTED:
+                logger.warning(f"【{self.cookie_id}】商品自动同步取消：账号已不在线")
+                return
+
+            try:
+                logger.info(
+                    f"【{self.cookie_id}】四条关键链路已就绪，开始自动同步全部商品"
+                    f"（第 {attempt}/3 次）"
+                )
+                result = await self.get_all_items(sync_item_details=True)
+                if result.get("success") and not result.get("error"):
+                    self.initial_product_sync_completed = True
+                    logger.success(
+                        f"【{self.cookie_id}】全部商品自动同步完成："
+                        f"{result.get('total_count', 0)} 个商品，"
+                        f"{result.get('total_pages', 0)} 页"
+                    )
+                    return
+
+                error_message = self._safe_str(result.get("error") or "商品列表接口未返回成功结果")
+                logger.warning(
+                    f"【{self.cookie_id}】全部商品自动同步未完成（第 {attempt}/3 次）：{error_message}"
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    f"【{self.cookie_id}】全部商品自动同步异常（第 {attempt}/3 次）：{self._safe_str(exc)}"
+                )
+
+            if attempt < 3:
+                await self._interruptible_sleep(attempt * 5)
+
+        logger.error(f"【{self.cookie_id}】全部商品自动同步失败，保留当前连接，不影响消息和自动回复")
+
     async def _interruptible_sleep(self, duration: float):
         """可中断的sleep，将长时间sleep拆分成多个短时间sleep，以便及时响应取消信号
         
@@ -2108,6 +2163,10 @@ class XianyuLive:
         self.max_connection_failures = 5  # 最大连续失败次数
         self.last_successful_connection = 0  # 上次成功连接时间
         self.last_state_change_time = time.time()  # 上次状态变化时间
+
+        # 全量商品同步属于本次账号接入，不应在每一次短暂断线重连时重复请求。
+        self.initial_product_sync_task = None
+        self.initial_product_sync_completed = False
 
         # 后台任务追踪（用于清理未等待的任务）
         self.background_tasks = set()  # 追踪所有后台任务
@@ -17577,6 +17636,10 @@ class XianyuLive:
                             if tasks_started:
                                 logger.info(f"【{self.cookie_id}】✅ 新启动的任务: {', '.join(tasks_started)}")
                             logger.info(f"【{self.cookie_id}】✅ 所有后台任务状态: 心跳(已启动), 会话保活({'运行中' if self.token_refresh_task and not self.token_refresh_task.done() else '已启动'}), 暂停清理({'运行中' if self.cleanup_task and not self.cleanup_task.done() else '已启动'}), Cookie刷新({'运行中' if self.cookie_refresh_task and not self.cookie_refresh_task.done() else '已启动'}), 业务流看门狗({'运行中' if self.stream_watchdog_task and not self.stream_watchdog_task.done() else '已启动'})")
+
+                            # 只有 WebSocket 鉴权、会话保活、Cookie 刷新和消息流均已
+                            # 启动后才拉取商品；这里不要求用户在页面额外选择商品。
+                            self._start_initial_product_sync()
                             
                             logger.info(f"【{self.cookie_id}】开始监听WebSocket消息...")
                             logger.info(f"【{self.cookie_id}】WebSocket连接状态正常，等待服务器消息...")
