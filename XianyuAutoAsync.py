@@ -12082,8 +12082,15 @@ class XianyuLive:
                     return 'one_spec'
                 return 'no_spec'
 
+            # 商品直接绑定的普通卡券不依赖订单规格。付款通知已经确认订单可发货时，
+            # 不再为它额外启动浏览器读取订单页，避免无意义的数秒等待。
+            bound_card = db_manager.get_item_delivery_card(self.cookie_id, item_id, user_id=self.user_id)
+            direct_card_without_specs = bool(
+                bound_card and not item_config_multi_spec and not bound_card.get('is_multi_spec')
+            )
+
             # 只要有订单ID就尝试拉取订单详情；规格商品缺失规格时自动重试，提升精确命中率
-            if order_id:
+            if order_id and not direct_card_without_specs:
                 logger.info(f"检测到订单ID，获取订单详情用于规则匹配: {order_id}")
                 max_detail_attempts = 3 if item_config_multi_spec else 1
                 for attempt in range(1, max_detail_attempts + 1):
@@ -12129,6 +12136,11 @@ class XianyuLive:
                             )
                     except Exception as cache_e:
                         logger.warning(f"订单缓存规格恢复失败: {self._safe_str(cache_e)}")
+            elif order_id:
+                logger.info(
+                    f"商品已绑定普通卡券，跳过订单详情浏览器读取并立即准备发货: "
+                    f"order_id={order_id}, item_id={item_id}"
+                )
             else:
                 logger.warning("当前无订单ID，跳过订单详情拉取，将仅基于商品文本匹配规则")
 
@@ -12164,7 +12176,6 @@ class XianyuLive:
             )
 
             delivery_rules = []
-            bound_card = db_manager.get_item_delivery_card(self.cookie_id, item_id, user_id=self.user_id)
             if bound_card:
                 if not bound_card.get('enabled'):
                     return build_result(False, error="商品绑定的卡券已停用，已阻断自动发货", match_mode_value='blocked_bound_card_disabled')
@@ -16729,9 +16740,10 @@ class XianyuLive:
                     # message['1'] 就是 sid（会话ID）
                     # 【优化】只使用简化消息触发自动发货，完整付款消息已注释
                     if isinstance(message.get('1'), str):
-                        logger.info(f'[{msg_time}] 【{self.cookie_id}】[{msg_id}] 🔔 检测到简化结构的发货通知消息，延迟处理')
-                        await asyncio.sleep(30)
-                        logger.info(f'[{msg_time}] 【{self.cookie_id}】[{msg_id}] 🔔 延迟30秒后处理简化发货')
+                        # 付款红点到达后只留很短的时间让订单基础消息落库。此前固定等
+                        # 30 秒会让用户在已付款后长时间收不到发货内容。
+                        await asyncio.sleep(3)
+                        logger.info(f'[{msg_time}] 【{self.cookie_id}】[{msg_id}] 🔔 订单基础信息已等待3秒，开始处理简化发货')
                         # 检查是否启用自动确认发货
                         if self.is_auto_confirm_enabled():
                             logger.info(f'[{msg_time}] 【{self.cookie_id}】[{msg_id}] ✅ 自动确认发货已启用，开始处理')
