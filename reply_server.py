@@ -9872,23 +9872,39 @@ def create_card(card_data: dict, current_user: Dict[str, Any] = Depends(get_curr
             if not card_data.get('spec_name') or not card_data.get('spec_value'):
                 raise HTTPException(status_code=400, detail="多规格卡券必须提供规格名称和规格值")
 
-        card_id = db_manager.create_card(
-            name=card_data.get('name'),
-            card_type=card_data.get('type'),
-            api_config=card_data.get('api_config'),
-            text_content=card_data.get('text_content'),
-            data_content=card_data.get('data_content'),
-            image_url=card_data.get('image_url'),
-            description=card_data.get('description'),
-            enabled=card_data.get('enabled', True),
-            delay_seconds=card_data.get('delay_seconds', 0),
-            is_multi_spec=is_multi_spec,
-            spec_name=card_data.get('spec_name') if is_multi_spec else None,
-            spec_value=card_data.get('spec_value') if is_multi_spec else None,
-            spec_name_2=card_data.get('spec_name_2') if is_multi_spec else None,
-            spec_value_2=card_data.get('spec_value_2') if is_multi_spec else None,
-            user_id=user_id
-        )
+        try:
+            card_id = db_manager.create_card(
+                name=card_data.get('name'),
+                card_type=card_data.get('type'),
+                api_config=card_data.get('api_config'),
+                text_content=card_data.get('text_content'),
+                data_content=card_data.get('data_content'),
+                image_url=card_data.get('image_url'),
+                description=card_data.get('description'),
+                enabled=card_data.get('enabled', True),
+                delay_seconds=card_data.get('delay_seconds', 0),
+                is_multi_spec=is_multi_spec,
+                spec_name=card_data.get('spec_name') if is_multi_spec else None,
+                spec_value=card_data.get('spec_value') if is_multi_spec else None,
+                spec_name_2=card_data.get('spec_name_2') if is_multi_spec else None,
+                spec_value_2=card_data.get('spec_value_2') if is_multi_spec else None,
+                user_id=user_id
+            )
+        except ValueError as error:
+            existing_card = db_manager.find_existing_card(
+                name=card_data.get('name'),
+                is_multi_spec=is_multi_spec,
+                spec_name=card_data.get('spec_name') if is_multi_spec else None,
+                spec_value=card_data.get('spec_value') if is_multi_spec else None,
+                user_id=user_id,
+            )
+            if existing_card:
+                return JSONResponse(status_code=409, content={
+                    'detail': str(error),
+                    'existing_card_id': existing_card['id'],
+                    'existing_card_name': existing_card['name'],
+                })
+            raise
 
         # 检查是否需要生成对应发货规则
         generate_delivery_rule = card_data.get('generate_delivery_rule', False)

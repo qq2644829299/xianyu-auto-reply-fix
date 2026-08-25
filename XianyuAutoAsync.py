@@ -2610,6 +2610,43 @@ class XianyuLive:
         )
         return {"match_type": match_type, "order": order}
 
+    def _apply_paid_red_reminder_to_sid_order(self, sid: str, sid_lookup: Dict[str, Any], *,
+                                               log_prefix: str = "") -> Dict[str, Any]:
+        """将闲鱼“等待卖家发货”红点作为已付款证据写回对应订单。
+
+        简化红点消息没有订单号，旧流程先去解析订单详情页；该页面偶尔只返回空壳，
+        结果已经收到的付款通知被卡在 processing。这里只接受闲鱼系统的明确红点，
+        并且只提升同一会话中尚未就绪的最近订单，绝不把普通下单消息当作付款。
+        """
+        order = (sid_lookup or {}).get('order') or {}
+        if (sid_lookup or {}).get('match_type') != 'not_ready':
+            return sid_lookup
+
+        order_id = str(order.get('order_id') or '').strip()
+        current_status = db_manager._normalize_order_status(order.get('order_status'))
+        if not order_id or current_status not in {'processing', 'pending_payment'}:
+            return sid_lookup
+
+        try:
+            updated = self.order_status_handler and self.order_status_handler.update_order_status(
+                order_id=order_id,
+                new_status='pending_ship',
+                cookie_id=self.cookie_id,
+                context='闲鱼系统红点：等待卖家发货',
+            )
+            if updated:
+                logger.info(
+                    f"{log_prefix} 已根据闲鱼系统‘等待卖家发货’通知确认付款："
+                    f"order_id={order_id}, sid={sid}"
+                )
+                return self._lookup_delivery_order_by_sid(sid, minutes=10, log_prefix=log_prefix)
+        except Exception as update_error:
+            logger.warning(
+                f"{log_prefix} 写入闲鱼付款状态失败，继续走订单详情校验："
+                f"order_id={order_id}, error={self._safe_str(update_error)}"
+            )
+        return sid_lookup
+
     async def _refresh_sid_lookup_if_needed(self, sid: str, sid_lookup: Dict[str, Any], *,
                                             item_id: str = None, buyer_id: str = None,
                                             minutes: int = 10, allow_bargain_ready: bool = False,
@@ -16712,6 +16749,13 @@ class XianyuLive:
                                 simple_sid,
                                 minutes=sid_lookup_minutes,
                                 log_prefix=log_prefix
+                            )
+                            # “等待卖家发货”是闲鱼系统明确的付款后通知。先用它更新
+                            # 同一会话的订单，避免订单详情页临时解析为空时漏掉自动发货。
+                            sid_lookup = self._apply_paid_red_reminder_to_sid_order(
+                                simple_sid,
+                                sid_lookup,
+                                log_prefix=log_prefix,
                             )
                             sid_lookup = await self._refresh_sid_lookup_if_needed(
                                 simple_sid,

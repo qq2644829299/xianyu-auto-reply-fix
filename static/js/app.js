@@ -8931,6 +8931,7 @@ function updateCardsStats(cards) {
 
 // 显示添加卡券模态框
 let pendingProductCardBinding = null;
+let cardSaveInFlight = false;
 
 function showAddCardModal() {
     pendingProductCardBinding = null;
@@ -9376,6 +9377,16 @@ function clearAddCardForm() {
 
 // 保存卡券
 async function saveCard() {
+    if (cardSaveInFlight) return;
+    const saveButton = document.getElementById('saveCardBtn');
+    const setSaving = (saving) => {
+        cardSaveInFlight = saving;
+        if (!saveButton) return;
+        saveButton.disabled = saving;
+        saveButton.innerHTML = saving
+            ? '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>保存中…'
+            : '保存卡券';
+    };
     try {
     const cardType = document.getElementById('cardType').value;
     const cardName = document.getElementById('cardName').value;
@@ -9517,6 +9528,7 @@ async function saveCard() {
 
     const generateDeliveryRule = false;
     
+    setSaving(true);
     const response = await fetch(`${apiBase}/cards`, {
         method: 'POST',
         headers: {
@@ -9544,9 +9556,23 @@ async function saveCard() {
             await loadAutoDeliveryWorkspace(true);
         }
     } else {
+        const errorData = await response.json().catch(() => ({}));
+        const existingCardId = Number(errorData.existing_card_id || 0);
+        if (response.status === 409 && existingCardId && pendingProductCardBinding) {
+            await bindNewCardToPendingProduct(existingCardId);
+            showToast('已有同名卡券，已直接绑定到该商品', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('addCardModal')).hide();
+            clearAddCardForm();
+            loadCards();
+            invalidateWorkspaceCache('/items');
+            invalidateWorkspaceCache('/cards');
+            if (document.getElementById('auto-delivery-section')?.classList.contains('active')) {
+                await loadAutoDeliveryWorkspace(true);
+            }
+            return;
+        }
         let errorMessage = '保存失败';
         try {
-        const errorData = await response.json();
         errorMessage = errorData.error || errorData.detail || errorMessage;
         } catch (e) {
         // 如果不是JSON格式，尝试获取文本
@@ -9562,6 +9588,8 @@ async function saveCard() {
     } catch (error) {
     console.error('保存卡券失败:', error);
     showToast(`网络错误: ${error.message}`, 'danger');
+    } finally {
+    setSaving(false);
     }
 }
 // ================================

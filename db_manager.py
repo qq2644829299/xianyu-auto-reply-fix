@@ -5300,6 +5300,33 @@ Cookie数量: {cookie_count}
                 logger.error(f"获取卡券失败: {e}")
                 return None
 
+    def find_existing_card(self, name: str, is_multi_spec: bool = False,
+                           spec_name: str = None, spec_value: str = None,
+                           user_id: int = None):
+        """按创建时的唯一规则查找已有卡券，用于把重复提交恢复为已有卡券绑定。"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                if is_multi_spec:
+                    cursor.execute('''
+                        SELECT id FROM cards
+                        WHERE name = ? AND is_multi_spec = 1
+                          AND spec_name = ? AND spec_value = ? AND user_id = ?
+                        ORDER BY id DESC LIMIT 1
+                    ''', (name, spec_name, spec_value, user_id))
+                else:
+                    cursor.execute('''
+                        SELECT id FROM cards
+                        WHERE name = ? AND (is_multi_spec = 0 OR is_multi_spec IS NULL)
+                          AND user_id = ?
+                        ORDER BY id DESC LIMIT 1
+                    ''', (name, user_id))
+                row = cursor.fetchone()
+                return self.get_card_by_id(int(row[0]), user_id) if row else None
+            except Exception as e:
+                logger.error(f"查找已有卡券失败: {e}")
+                return None
+
     def update_card(self, card_id: int, name: str = None, card_type: str = None,
                    api_config=None, text_content: str = None, data_content: str = None,
                    image_url: str = None, description: str = None, enabled: bool = None,
