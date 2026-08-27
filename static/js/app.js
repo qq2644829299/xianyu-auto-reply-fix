@@ -112,7 +112,10 @@ let messageFilterState = {
 };
 let loadingRequestCount = 0;
 let loadingShowTimer = null;
+let loadingSafetyTimer = null;
 const LOADING_SHOW_DELAY = 120;
+// 全屏蒙层只用于短操作。任一旧页面逻辑遗漏收尾时，不能把整个后台永久锁住。
+const LOADING_MAX_VISIBLE_MS = 8000;
 
 // ================================
 // 通用功能 - 菜单切换和导航
@@ -3536,6 +3539,18 @@ function toggleLoading(show) {
                 }
                 loadingShowTimer = null;
             }, LOADING_SHOW_DELAY);
+
+            if (loadingSafetyTimer) {
+                clearTimeout(loadingSafetyTimer);
+            }
+            loadingSafetyTimer = setTimeout(() => {
+                if (loadingRequestCount > 0) {
+                    console.warn('全局加载状态超时，已自动恢复页面交互', { loadingRequestCount });
+                    loadingRequestCount = 0;
+                    loadingEl.classList.add('d-none');
+                }
+                loadingSafetyTimer = null;
+            }, LOADING_MAX_VISIBLE_MS);
         }
         return;
     }
@@ -3548,6 +3563,10 @@ function toggleLoading(show) {
         if (loadingShowTimer) {
             clearTimeout(loadingShowTimer);
             loadingShowTimer = null;
+        }
+        if (loadingSafetyTimer) {
+            clearTimeout(loadingSafetyTimer);
+            loadingSafetyTimer = null;
         }
         loadingEl.classList.add('d-none');
     }
