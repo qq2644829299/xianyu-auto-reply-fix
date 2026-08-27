@@ -1372,6 +1372,62 @@ async def root():
         return HTMLResponse('<h3>鱼智云官网暂不可用</h3>', status_code=503)
 
 
+def _public_page_response(filename: str) -> HTMLResponse:
+    """返回可公开抓取的官网说明页；后台和登录页不在此范围内。"""
+    page_path = os.path.join(static_dir, filename)
+    if not os.path.exists(page_path):
+        raise HTTPException(status_code=404, detail='页面不存在')
+    with open(page_path, 'r', encoding='utf-8') as page_file:
+        return HTMLResponse(
+            page_file.read(),
+            headers={'X-Robots-Tag': 'index, follow, max-image-preview:large'},
+        )
+
+
+@app.get('/xianyu-auto-delivery', response_class=HTMLResponse)
+async def xianyu_auto_delivery_landing():
+    """面向搜索用户的闲鱼自动发货产品说明页。"""
+    return _public_page_response('xianyu-auto-delivery.html')
+
+
+@app.get('/xianyu-ai-auto-reply', response_class=HTMLResponse)
+async def xianyu_ai_auto_reply_landing():
+    """面向搜索用户的闲鱼 AI 自动回复产品说明页。"""
+    return _public_page_response('xianyu-ai-auto-reply.html')
+
+
+@app.get('/robots.txt', include_in_schema=False)
+async def robots_txt():
+    return Response(
+        content='''User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api/
+Disallow: /captcha/
+Disallow: /login.html
+Disallow: /register.html
+Disallow: /static/uploads/
+
+Sitemap: https://xy.zyt2025.top/sitemap.xml
+''',
+        media_type='text/plain; charset=utf-8',
+    )
+
+
+@app.get('/sitemap.xml', include_in_schema=False)
+async def sitemap_xml():
+    today = get_local_now().date().isoformat()
+    return Response(
+        content=f'''<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://xy.zyt2025.top/</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>https://xy.zyt2025.top/xianyu-auto-delivery</loc><lastmod>{today}</lastmod><changefreq>monthly</changefreq><priority>0.9</priority></url>
+  <url><loc>https://xy.zyt2025.top/xianyu-ai-auto-reply</loc><lastmod>{today}</lastmod><changefreq>monthly</changefreq><priority>0.9</priority></url>
+</urlset>''',
+        media_type='application/xml; charset=utf-8',
+    )
+
+
 # ========================= 验证码API =========================
 
 @app.get('/captcha/generate')
