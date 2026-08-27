@@ -6,6 +6,8 @@ services:
     image: xianyu-auto-reply-fix:latest
     container_name: xianyu-auto-reply-fix
     restart: unless-stopped
+    # 负责回收浏览器等子进程，避免长期运行后遗留进程耗尽系统资源。
+    init: true
     # 使用root用户避免权限问题
     user: "0:0"
     # 使用 bash 执行脚本，避免 Windows 行尾格式问题
@@ -42,7 +44,8 @@ services:
       - DEBUG=${DEBUG:-false}
       - RELOAD=${RELOAD:-false}
       # SQL日志配置（默认启用，可通过环境变量覆盖）
-      - SQL_LOG_ENABLED=${SQL_LOG_ENABLED:-true}
+      # 常规运行不记录每条数据库语句，避免日志持续膨胀；排障时可在 .env 临时开启。
+      - SQL_LOG_ENABLED=${SQL_LOG_ENABLED:-false}
       - SQL_LOG_LEVEL=${SQL_LOG_LEVEL:-INFO}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
@@ -80,6 +83,13 @@ services:
       - TOKEN_REFRESH_INTERVAL=${TOKEN_REFRESH_INTERVAL:-3600}
       - TOKEN_RETRY_INTERVAL=${TOKEN_RETRY_INTERVAL:-300}
       - MESSAGE_EXPIRE_TIME=${MESSAGE_EXPIRE_TIME:-300000}
+
+    # 限制容器标准输出日志，防止长期运行占满磁盘。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
     networks:
       - xianyu-network
