@@ -4377,6 +4377,19 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         'token_refresh_exception',
         'token_init_failed',
     }
+    # ``running`` 只表示本地实例仍在运行，不能代表闲鱼登录仍有效。
+    # Token 恢复明确失败时，前端必须停止展示“正在恢复”，并引导用户重新扫码。
+    token_error_message = str(
+        getattr(live_instance, 'last_token_refresh_error_message', None) or ''
+    )
+    session_error_message = str(
+        getattr(live_instance, 'last_session_keepalive_error_message', None) or ''
+    )
+    auth_expired_markers = ('session过期', 'session expired', '登录已过期', '登录失效')
+    reauth_required = (
+        token_refresh_status == 'token_expired_recovery_failed'
+        or any(marker in f'{token_error_message} {session_error_message}'.lower() for marker in auth_expired_markers)
+    )
     session_display_status = session_keepalive_status
     session_display_note = None
     if (
@@ -4535,14 +4548,19 @@ def _build_live_runtime_status(cookie_id: str) -> Dict[str, Any]:
         'message_stream_note': message_stream_note,
         'token_cached': token_cached,
         'token_refresh_status': token_refresh_status,
-        'token_refresh_error_message': getattr(live_instance, 'last_token_refresh_error_message', None),
+        'token_refresh_error_message': token_error_message or None,
+        'reauth_required': reauth_required,
+        'reauth_message': (
+            '闲鱼登录已失效，轻保活无法恢复。请重新扫码登录；扫码完成后系统会自动继续连接。'
+            if reauth_required else None
+        ),
         'token_last_refreshed_at': token_refreshed_at,
         'token_last_refreshed_at_display': _format_runtime_timestamp(token_refreshed_at),
         'token_age_seconds': _get_runtime_age_seconds(token_refreshed_at),
         'session_keepalive_status': session_keepalive_status,
         'session_keepalive_display_status': session_display_status,
         'session_keepalive_display_note': session_display_note,
-        'session_keepalive_error_message': getattr(live_instance, 'last_session_keepalive_error_message', None),
+        'session_keepalive_error_message': session_error_message or None,
         'session_keepalive_at': session_keepalive_at,
         'session_keepalive_at_display': _format_runtime_timestamp(session_keepalive_at),
         'session_keepalive_age_seconds': _get_runtime_age_seconds(session_keepalive_at),

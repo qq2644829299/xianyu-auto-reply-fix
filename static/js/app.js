@@ -770,6 +770,11 @@ function shouldAutoRetryRuntimeStatus(runtimeStatus) {
         return false;
     }
 
+    // Cookie / Session 已明确过期时，重试不会自行恢复，只会让用户一直看到“恢复中”。
+    if (isAccountRescanRequired(runtimeStatus)) {
+        return false;
+    }
+
     const connectionState = String(runtimeStatus.connection_state || '').trim();
     if (connectionState === 'connecting' || connectionState === 'reconnecting') {
         return true;
@@ -787,6 +792,17 @@ function shouldAutoRetryRuntimeStatus(runtimeStatus) {
     return ((Date.now() / 1000) - recentAnchor) <= 90;
 }
 
+function isAccountRescanRequired(runtimeStatus) {
+    const status = String(runtimeStatus?.token_refresh_status || '').trim();
+    const detail = `${runtimeStatus?.token_refresh_error_message || ''} ${runtimeStatus?.session_keepalive_error_message || ''}`.toLowerCase();
+    return runtimeStatus?.reauth_required === true
+        || status === 'token_expired_recovery_failed'
+        || detail.includes('session过期')
+        || detail.includes('session expired')
+        || detail.includes('登录已过期')
+        || detail.includes('登录失效');
+}
+
 function getMessageStreamRuntimeDisplay(runtimeStatus) {
     const normalizedRuntimeStatus = runtimeStatus || {};
     const explicitStatus = String(normalizedRuntimeStatus.message_stream_status || '').trim();
@@ -794,6 +810,9 @@ function getMessageStreamRuntimeDisplay(runtimeStatus) {
     const connectionState = String(normalizedRuntimeStatus.connection_state || '').trim();
 
     let status = explicitStatus;
+    if (isAccountRescanRequired(normalizedRuntimeStatus)) {
+        status = 'reauth_required';
+    }
     if (!status) {
         if (!normalizedRuntimeStatus.running) {
             status = 'not_running';
@@ -810,7 +829,9 @@ function getMessageStreamRuntimeDisplay(runtimeStatus) {
 
     let note = explicitNote;
     if (!note) {
-        if (!normalizedRuntimeStatus.running) {
+        if (isAccountRescanRequired(normalizedRuntimeStatus)) {
+            note = '闲鱼登录已失效，请重新扫码登录后再建立业务消息连接';
+        } else if (!normalizedRuntimeStatus.running) {
             note = '账号实例未启动，业务消息流尚未建立';
         } else if (status === 'recovering') {
             note = '连接正在恢复，业务消息流状态将在重连稳定后更新';
@@ -1026,7 +1047,9 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
         'token_refresh_exception',
     ]);
     const manualKeywords = ['滑块', '风控', '验证码', '验证', '账号存在风险', '拦截', '客户端登录'];
-    const needsIntervention = verificationRequired
+    const rescanRequired = isAccountRescanRequired(runtimeStatus);
+    const needsIntervention = rescanRequired
+        || verificationRequired
         || Boolean(noteText)
         || manualStatuses.has(tokenStatus)
         || manualKeywords.some(keyword => combinedText.includes(keyword));
@@ -1036,7 +1059,9 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
     }
 
     let title = noteText || '检测到滑块/风控，需要人工处理';
-    if (verificationRequired) {
+    if (rescanRequired) {
+        title = '闲鱼登录已失效，需要重新扫码登录';
+    } else if (verificationRequired) {
         title = '等待完成闲鱼官方验证';
     } else if (!noteText && tokenStatus === 'password_login_backoff_wait') {
         title = '登录恢复退避中，暂不可接管';
@@ -1045,7 +1070,9 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
     }
 
     let detail = tokenError || '系统检测到认证链路异常。';
-    if (verificationRequired) {
+    if (rescanRequired) {
+        detail = runtimeStatus?.reauth_message || '当前登录状态已过期，刷新状态和轻保活都无法恢复。请重新扫码，成功后系统会自动继续连接。';
+    } else if (verificationRequired) {
         detail = runtimeStatus?.credential_verification_message || '请打开闲鱼官方验证页面，完成验证后系统会继续获取连接凭证。';
     } else if (vncAvailable) {
         detail = tokenError || '当前存在可接管的浏览器流程，请通过远程桌面完成滑块、扫码、人脸或其他风控验证。';
@@ -1061,6 +1088,31 @@ function getManualInterventionAlert(statusNote, runtimeStatus) {
         verificationUrl,
         vncAvailable: Boolean(verificationUrl),
     };
+}
+
+function startAccountRescan(accountId, button = null) {
+    const normalizedAccountId = String(accountId || '').trim();
+    if (!normalizedAccountId) {
+        showToast('没有找到需要重新登录的账号', 'warning');
+        return;
+    }
+
+    pendingAccountManagementFocusId = normalizedAccountId;
+    const originalHtml = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>正在打开扫码登录…';
+    }
+
+    // 二维码登录成功时服务端按闲鱼账号 ID 更新现有 Cookie，不会创建重复账号。
+    showSection('accounts');
+    setTimeout(() => {
+        showQRCodeLogin('standard');
+        if (button && document.body.contains(button)) {
+            button.disabled = false;
+            button.innerHTML = originalHtml;
+        }
+    }, 180);
 }
 
 // 官方验证只能由用户在闲鱼页面完成。此按钮只恢复原有的凭证获取请求，
@@ -1133,13 +1185,19 @@ function buildManualInterventionAlert(statusNote, runtimeStatus, options = {}) {
                 <div class="manual-intervention-alert-detail">${escapeHtml(alert.detail)}</div>
             </div>
             <div class="manual-intervention-alert-actions">
+            ${isAccountRescanRequired(runtimeStatus) && options.accountId ? `
+                <button type="button" class="manual-intervention-alert-action is-primary" data-account-id="${escapeHtml(options.accountId)}" onclick="event.stopPropagation();startAccountRescan(this.dataset.accountId, this);">
+                    <i class="bi bi-qr-code-scan" aria-hidden="true"></i>
+                    重新扫码登录
+                </button>
+            ` : ''}
             ${runtimeStatus?.credential_verification_required && options.accountId ? `
                 <button type="button" class="manual-intervention-alert-action is-primary" data-account-id="${escapeHtml(options.accountId)}" onclick="event.stopPropagation();resumeAccountCredentialAcquire(this.dataset.accountId, this);">
                     <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
                     我已完成验证，继续连接
                 </button>
             ` : ''}
-            ${options.accountId ? `
+            ${options.accountId && !isAccountRescanRequired(runtimeStatus) ? `
                 <button type="button" class="manual-intervention-alert-action" data-account-id="${escapeHtml(options.accountId)}" data-has-credentials="${options.hasCredentials ? 'true' : 'false'}" onclick="event.stopPropagation();goToAccountRecovery(this.dataset.accountId, this.dataset.hasCredentials === 'true');">
                     <i class="bi bi-tools" aria-hidden="true"></i>
                     ${options.hasCredentials ? '去恢复账号' : '扫码重新登录'}
@@ -4506,6 +4564,7 @@ function getAboutStatusText(type, value) {
             failed: '失败',
         },
         stream: {
+            reauth_required: '需重新扫码',
             healthy: '正常',
             recovered: '已恢复',
             warming_up: '预热中',
@@ -4728,6 +4787,13 @@ function renderAboutHistoryPlaceholder(title, subtitle) {
 }
 
 function getAboutRuntimeOverview(runtimeStatus, readinessCount = 0) {
+    if (isAccountRescanRequired(runtimeStatus)) {
+        return {
+            tone: 'danger',
+            title: '闲鱼登录已失效，请重新扫码登录',
+            note: '当前登录状态已经过期，继续刷新或等待重连都不会恢复。点击下方“重新扫码登录”，完成后系统会自动继续连接。',
+        };
+    }
     if (runtimeStatus?.credential_verification_required) {
         return {
             tone: 'warning',
