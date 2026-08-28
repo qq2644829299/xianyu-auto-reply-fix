@@ -1437,6 +1437,12 @@ async def indexnow_key_file():
     )
 
 
+@app.get('/baidu_verify_codeva-UZIsCkFyGh.html', include_in_schema=False)
+async def baidu_verify_file():
+    """百度搜索资源平台站点归属验证文件。"""
+    return HTMLResponse(content='e61e3470b8fd06a8aadd1341b84484a4')
+
+
 # ========================= 验证码API =========================
 
 @app.get('/captcha/generate')
