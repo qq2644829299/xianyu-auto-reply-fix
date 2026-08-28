@@ -1428,6 +1428,15 @@ async def sitemap_xml():
     )
 
 
+# IndexNow 的公开所有权文件。它只用于向参与该协议的搜索引擎通知页面更新。
+@app.get('/ccbeac612e57491ca898b4cf9bb08620.txt', include_in_schema=False)
+async def indexnow_key_file():
+    return Response(
+        content='ccbeac612e57491ca898b4cf9bb08620',
+        media_type='text/plain; charset=utf-8',
+    )
+
+
 # ========================= 验证码API =========================
 
 @app.get('/captcha/generate')
