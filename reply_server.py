@@ -1396,6 +1396,12 @@ async def xianyu_ai_auto_reply_landing():
     return _public_page_response('xianyu-ai-auto-reply.html')
 
 
+@app.get('/xianyu-digital-product-delivery-guide', response_class=HTMLResponse)
+async def xianyu_digital_product_delivery_guide():
+    """面向搜索用户的数字商品发货指南。"""
+    return _public_page_response('xianyu-digital-product-delivery-guide.html')
+
+
 @app.get('/robots.txt', include_in_schema=False)
 async def robots_txt():
     return Response(
@@ -1423,8 +1429,29 @@ async def sitemap_xml():
   <url><loc>https://xy.zyt2025.top/</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
   <url><loc>https://xy.zyt2025.top/xianyu-auto-delivery</loc><lastmod>{today}</lastmod><changefreq>monthly</changefreq><priority>0.9</priority></url>
   <url><loc>https://xy.zyt2025.top/xianyu-ai-auto-reply</loc><lastmod>{today}</lastmod><changefreq>monthly</changefreq><priority>0.9</priority></url>
+  <url><loc>https://xy.zyt2025.top/xianyu-digital-product-delivery-guide</loc><lastmod>{today}</lastmod><changefreq>monthly</changefreq><priority>0.8</priority></url>
 </urlset>''',
         media_type='application/xml; charset=utf-8',
+    )
+
+
+@app.get('/feed.xml', include_in_schema=False)
+async def public_content_feed():
+    """公开内容订阅源，方便搜索服务发现新增和更新的说明页面。"""
+    updated = get_local_now().strftime('%Y-%m-%dT%H:%M:%S+08:00')
+    return Response(
+        content=f'''<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="zh-CN">
+  <title>鱼智云：闲鱼卖家工具说明</title>
+  <id>https://xy.zyt2025.top/</id>
+  <updated>{updated}</updated>
+  <link href="https://xy.zyt2025.top/feed.xml" rel="self" type="application/atom+xml"/>
+  <link href="https://xy.zyt2025.top/"/>
+  <entry><title>闲鱼自动发货工具</title><id>https://xy.zyt2025.top/xianyu-auto-delivery</id><link href="https://xy.zyt2025.top/xianyu-auto-delivery"/><updated>{updated}</updated><summary>同步商品、绑定卡券库存并按订单自动发送数字内容。</summary></entry>
+  <entry><title>闲鱼 AI 自动回复工具</title><id>https://xy.zyt2025.top/xianyu-ai-auto-reply</id><link href="https://xy.zyt2025.top/xianyu-ai-auto-reply"/><updated>{updated}</updated><summary>结合商品资料与会话上下文处理买家咨询，支持人工接管。</summary></entry>
+  <entry><title>闲鱼数字商品自动发货指南</title><id>https://xy.zyt2025.top/xianyu-digital-product-delivery-guide</id><link href="https://xy.zyt2025.top/xianyu-digital-product-delivery-guide"/><updated>{updated}</updated><summary>介绍数字商品自动发货的配置步骤、库存管理与异常订单处理。</summary></entry>
+</feed>''',
+        media_type='application/atom+xml; charset=utf-8',
     )
 
 
