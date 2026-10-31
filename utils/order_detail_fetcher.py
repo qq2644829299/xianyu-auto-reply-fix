@@ -17,17 +17,21 @@ from collections import defaultdict
 from utils.time_utils import parse_local_datetime_text_to_db_utc
 
 
-def _chromium_launch_options(headless: bool, browser_args: List[str]) -> Dict[str, Any]:
-    """Docker 镜像使用系统 Chromium，避免依赖不存在的 Playwright 下载目录。"""
-    options: Dict[str, Any] = {'headless': headless, 'args': browser_args}
-    candidates = [os.getenv('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', '').strip()]
-    if os.getenv('DOCKER_ENV') or os.path.exists('/.dockerenv'):
-        candidates.extend(['/usr/bin/chromium', '/usr/bin/chromium-browser'])
-    for executable_path in candidates:
-        if executable_path and os.path.isfile(executable_path) and os.access(executable_path, os.X_OK):
-            options['executable_path'] = executable_path
-            break
-    return options
+def _deploy_mode() -> str:
+    """部署形态：`server`（无浏览器）或 `desktop`（本地完整功能）。
+
+    形态 B（混合部署）的核心开关：
+      - server：服务器只做账号/数据/面板/回复决策，**不启浏览器**；
+      - desktop：桌面客户端承担浏览器相关的全部工作（登录、扫码、滑块、抓页面）。
+
+    读不到配置时回退 desktop，保证本地与容器默认行为不变。
+    """
+    try:
+        from config import DEPLOY_MODE
+        return str(DEPLOY_MODE or 'desktop').strip().lower()
+    except Exception:
+        return str(os.environ.get('DEPLOY_MODE', 'desktop')).strip().lower()
+
 
 # 修复Docker环境中的asyncio事件循环策略问题
 if sys.platform.startswith('linux') or os.getenv('DOCKER_ENV'):
@@ -93,6 +97,56 @@ class OrderDetailFetcher:
 
     # 类级别的锁字典，为每个order_id维护一个锁
     _order_locks = defaultdict(lambda: asyncio.Lock())
+
+    async def _fetch_via_mtop_http(self, order_id: str) -> Optional[Dict[str, Any]]:
+        """优先用 mtop 纯 HTTP 接口取订单详情，不启浏览器。
+
+        成功返回与浏览器路径同构的字典，失败返回 None 由调用方决定是否走浏览器。
+        参考鱼店长：它从不打开订单详情页，全部靠接口与消息。
+        """
+        cookie_str = self.cookie or ''
+        if not cookie_str:
+            return None
+        try:
+            from utils.mtop_order_api import fetch_order_detail_http
+
+            data = await fetch_order_detail_http(
+                cookie_str, order_id, account_id=self.cookie_id_for_log
+            )
+        except Exception as exc:
+            logger.debug(f"【{self.cookie_id_for_log}】mtop 订单详情异常: {exc}")
+            return None
+
+        if not data:
+            logger.info(f"【{self.cookie_id_for_log}】mtop 未取到订单 {order_id}，准备走浏览器兜底")
+            return None
+
+        result = {
+            'order_id': order_id,
+            'url': f"https://www.goofish.com/order-detail?orderId={order_id}&role=seller",
+            'title': f"订单详情 - {order_id}",
+            'sku_info': {
+                'spec_name': data.get('spec_name', ''),
+                'spec_value': data.get('spec_value', ''),
+                'quantity': data.get('quantity', '') or '1',
+                'amount': data.get('amount', ''),
+                'amount_source': 'mtop_http',
+            },
+            'spec_name': data.get('spec_name', ''),
+            'spec_value': data.get('spec_value', ''),
+            'amount': data.get('amount', ''),
+            'order_status': data.get('order_status', ''),
+            'item_id': data.get('item_id', ''),
+            'buyer_id': data.get('buyer_id', ''),
+            'title_text': data.get('item_title', ''),
+            'source': 'mtop_http',
+            'raw': data,
+        }
+        logger.info(
+            f"【{self.cookie_id_for_log}】订单 {order_id} 通过 mtop HTTP 获取成功"
+            f"（金额={result['amount']}, 状态={result['order_status']}），未启动浏览器"
+        )
+        return result
 
     def __init__(self, cookie_string: str = None, headless: bool = True, cookie_id_for_log: str = "unknown"):
         self.browser: Optional[Browser] = None
@@ -200,7 +254,8 @@ class OrderDetailFetcher:
 
             logger.info(f"启动浏览器，参数: {browser_args}")
             self.browser = await self._playwright.chromium.launch(
-                **_chromium_launch_options(headless=headless, browser_args=browser_args)
+                headless=headless,
+                args=browser_args
             )
 
             logger.info("浏览器启动成功，创建上下文...")
@@ -326,6 +381,26 @@ class OrderDetailFetcher:
                             print(f"⚠️ 订单 {order_id} 缓存不满足复用条件，重新获取详情...")
                 else:
                     logger.info(f"🔄 订单 {order_id} 强制刷新模式，跳过缓存检查")
+
+                # ---------------------------------------------------------
+                # 纯 HTTP 优先（mtop 接口），不启浏览器。
+                #
+                # 逆向鱼店长得出结论：它从不打开订单详情页，靠消息和数据接口办事。
+                # 本文件用 Playwright 渲染 order-detail 页面再解析 DOM，代价极重
+                # （每次查询一个浏览器上下文，2G 服务器曾被拖到 OOM）。
+                # 这里先用 mtop HTTP 拿一遍，成功就直接返回，失败才走浏览器。
+                # 服务器模式（DEPLOY_MODE=server）下连浏览器兜底都关掉。
+                # ---------------------------------------------------------
+                http_result = await self._fetch_via_mtop_http(order_id)
+                if http_result:
+                    return http_result
+
+                if _deploy_mode() == 'server':
+                    logger.warning(
+                        f"订单 {order_id} mtop HTTP 未取得详情，而当前为 server 模式"
+                        f"（不使用浏览器），本次返回 None"
+                    )
+                    return None
 
                 # 只有在数据库中没有有效数据时才初始化浏览器
                 logger.info(f"🌐 订单 {order_id} 需要浏览器获取，开始初始化浏览器...")

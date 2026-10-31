@@ -208,3 +208,11 @@ else:
     COOKIES_LIST = [{'id': 'default', 'value': val}] if val else []
 
 
+
+# ======================================================================
+# 部署形态（形态 B：混合部署）
+# ======================================================================
+# server  : 服务器只做账号/数据/面板/回复决策，不启动任何浏览器
+# desktop : 桌面客户端承担浏览器相关全部工作（登录/扫码/滑块/抓页面）
+# 由环境变量 DEPLOY_MODE 或本配置控制，默认 desktop（保持原行为）。
+DEPLOY_MODE = (os.environ.get('DEPLOY_MODE') or config.get('DEPLOY_MODE', 'desktop') or 'desktop').strip().lower()
