@@ -151,7 +151,143 @@ curl http://127.0.0.1:8080/api/browser-im/status
 2. **profile 目录**：每账号一个 `browser_data/im_sessions/<cookie_id>/`，不要跨账号复用。
 3. **首次登录**：项目原有扫码登录照常使用；登录后新 cookie 会自动同步进浏览器会话（`apply_cookies`）。
 4. **降级路径**：浏览器连续 3 次启动失败会自动回退到原直连逻辑，并打日志告警——**但回退后仍会出验证码**，这是预期行为，说明需要修浏览器环境。
-5. **无头 + 强验证**：无头模式下若页面弹真人验证，代码会选择"跳过滑块、等下一轮刷新自愈"而不是硬闯。
+5. **无头 + 强验证**：无头模式下若页面弹真人验证，页内滑块会照常尝试；仍不通过则跳过、等下一轮刷新自愈。
    这种情况下请临时切 `headless: false` 人工过一次。
 6. 建议把原 `HEARTBEAT_INTERVAL`（15s）保留不动——它现在只影响**非浏览器模式**的节奏，
    以及浏览器模式下的状态轮询间隔（内部已按 `max(10, heartbeat_interval)` 取值）。
+
+---
+
+# 八、页内自动滑块（第二阶段）
+
+## 8.1 逆向依据
+
+`鱼店长Pro` 的验证相关配置在 `AgisoIdleClient.Model.AccountConfig` 里（元数据可读）：
+
+| 配置项 | 含义 |
+|---|---|
+| `EnableAutoVerify` | 自动验证总开关 |
+| `EnableAutoVerifyRetry` | 失败后自动重试 |
+| `VerifyRetryMin` | 重试间隔（分钟） |
+| `RepeatVerifyFailTip` | 反复失败的提示文案 |
+| `FrontHanlder.SliderVerify()` | 滑块事件由**页面 JS 回调**到 C# |
+| `JsWs.RefreshPage(reason)` | 兜底：整页刷新换新会话 |
+
+`AgisoIdleClient.dll` 的资源区整体加密（内嵌 MZ 保护器 + 随机魔数，方法体被抹成 `nop;ret`），
+静态取不到滑块 JS。但配置语义已足够确定设计：**验证发生在同一条已登录的浏览器会话里**，
+C# 只在页面报告验证事件后做状态管理与重试，并且保留"刷新页面"作为最后手段。
+
+## 8.2 为什么必须"页内"
+
+本项目原有 `utils/xianyu_slider_stealth.py` 的轨迹算法（含 1D Perlin 噪声）质量很好，
+但它是**新开一个浏览器、新装一份 cookie** 去闯验证：
+
+```
+发起请求的会话 A  ──触发风控──>  滑块会话 B ──通过──> cookie 回灌 A
+```
+
+B 的 canvas/WebGL/TLS 指纹、`_m_h5_tk` 时序、baxia 埋点与 A 不是同一个，
+即使拖对了，平台也常判定"验证环境不一致"而不放行——这是"验证码老过不去"的另一半原因。
+
+鱼店长的做法是 **A 自己验证自己**，本模块照此实现。
+
+## 8.3 实现对照
+
+| 鱼店长Pro | 本次实现 | 文件 |
+|---|---|---|
+| `EnableAutoVerify` | `AUTO_SLIDER.enabled` | `config.py` |
+| `EnableAutoVerifyRetry` + `VerifyRetryMin` | `max_attempts` + `retry_interval_seconds`（逐次递增） | `auto_slider.py` |
+| `RepeatVerifyFailTip` | 连续失败 ≥2 次发通知，建议切有头人工 | `_browser_auto_slider` |
+| `FrontHanlder.SliderVerify()` | `AutoSlider.solve()` 主动驱动 | `auto_slider.py` |
+| `JsWs.RefreshPage(reason)` | 自愈前置 + 每次重试前 `reload` 拿新 puzzle | `ws_watchdog.py` / `auto_slider.py` |
+
+## 8.4 关键实现点
+
+1. **同会话**：直接复用 `BrowserIMSession` 的 page/context，不新建浏览器。
+2. **真实指针事件**：用 `page.mouse.move/down/up`，底层是 CDP `Input.dispatchMouseEvent`，
+   `isTrusted = true`，与真人操作同等对待（不是 JS 里 `dispatchEvent` 的伪事件）。
+3. **拟人轨迹**：
+   - 三次贝塞尔加速段 + 减速段；
+   - 末端轻微过冲再回退（人手不会精确停在目标点）；
+   - 水平抖动 + 高频微抖 + 偶发 40~130ms 长停顿（"犹豫"）。
+4. **多形态选择器**：`#nc_1_n1z` / `.btn_slide` / `#nc_2_n1z` 等手柄，
+   `#nc_1_n1t` / `.nc_scale` 等轨道，并支持 `#baxia-dialog-content` 等 **iframe** 内的滑块。
+5. **通过判定**三重保险：`x5sec` cookie 出现 → URL 离开 punish 页 → 滑块容器消失且无验证文案。
+6. **失败判定**：出现"验证失败/请重试/出错"即提前退出，不空等。
+7. **有头兜底**：自动尝试失败后，有头模式再给 `headful_manual_wait_seconds` 让真人接手。
+
+## 8.5 处理链路（最终形态）
+
+```
+mtop 返回 FAIL_SYS_USER_VALIDATE
+        │
+        ▼
+① 浏览器自愈：整页刷新 → 重取 token ──成功──> 返回，完全不用滑块
+        │ 失败
+        ▼
+② 页内自动滑块（同会话 + 真实指针事件 + 拟人轨迹）
+        │ 成功 ──> 回灌 cookie + 换新 IM token → 返回
+        │ 失败
+        ▼
+③ 有头模式：留 90s 给人工作业
+   无头模式：跳过，等下一轮刷新自愈（不空转、不硬闯）
+        │ 全失败
+        ▼
+④ 降级到原有页外滑块（保留，作为最后保底）
+```
+
+## 8.6 配置
+
+```yaml
+AUTO_SLIDER:
+  enabled: true                    # 自动滑块总开关
+  max_attempts: 3                  # 单轮最多尝试次数
+  retry_interval_seconds: 5        # 首次重试间隔（逐次递增）
+  drag_timeout_seconds: 20         # 单次拖动后等待判定时长
+  headful_manual_wait_seconds: 90  # 有头模式下自动失败后留给人工的时长
+  notify_on_repeat_fail: true      # 反复失败时通知
+  rotate_page_before_retry: true   # 每次重试前刷新验证页拿新 puzzle
+```
+
+## 8.7 验证
+
+```bash
+venv\Scripts\python.exe tools\verify_auto_slider.py
+```
+
+自检用本地构造的 nc 风格滑块页面（拖到 92% 即通过并写 `x5sec` cookie），**12 项全通过**：
+
+```
+[PASS] 轨迹点数合理 91 点
+[PASS] 轨迹覆盖全程 最远 263.8px / 目标 260px
+[PASS] 末端回落到目标 落点 260.0px
+[PASS] 存在垂直抖动
+[PASS] 延时序列对齐 91 个
+[PASS] 浏览器启动
+[PASS] 滑块定位 handle=40px track=300px
+[PASS] 拖动事件已发出 down=1 moves=90 up=1
+[PASS] 移动步数充足 moves=90
+[PASS] 通过判定生效
+[PASS] solve 返回成功 ok=True reason=passed attempts=1
+[PASS] 未验证不误判
+```
+
+其中 `down=1 moves=90 up=1` 证明是**真实鼠标事件**驱动页面完成拖动，一次通过。
+
+运行时日志应出现：
+
+```
+【账号】[自动滑块] 开始页内验证（同会话）
+【账号】[滑块] 定位到滑块 handle=40px track=300px 需拖动≈254px
+【账号】[滑块] ✅ 第 1 次尝试通过验证（同会话页内）
+【账号】[自动滑块] 已换新 IM token
+```
+
+## 8.8 说明
+
+* 页内滑块的**通过率取决于真实滑块难度**，机制正确不等于 100% 通过；偶发难图会重试或转人工。
+* 每次都换新 puzzle（`rotate_page_before_retry`）比在同一张图上反复拖更容易过。
+* `x5sec` cookie 一旦拿到会被持久化到账号 profile，后续相当长时间不再验证。
+* 想进一步提高通过率：把 `headless` 设为 `false`——有头模式下 canvas/WebGL 指纹更完整，
+  且失败时能人工兜底。
+

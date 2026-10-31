@@ -22,7 +22,7 @@ from config import (
     TOKEN_REFRESH_INTERVAL, TOKEN_RETRY_INTERVAL,
     SESSION_KEEPALIVE_INTERVAL, SESSION_KEEPALIVE_RETRY_INTERVAL, COOKIES_STR,
     LOG_CONFIG, AUTO_REPLY, DEFAULT_HEADERS, WEBSOCKET_HEADERS,
-    APP_CONFIG, API_ENDPOINTS, YIFAN_API, RISK_CONTROL, BROWSER_IM
+    APP_CONFIG, API_ENDPOINTS, YIFAN_API, RISK_CONTROL, BROWSER_IM, AUTO_SLIDER
 )
 # from app.logging_config import setup_logging  # 已移除，模块不存在
 import sys
@@ -2191,6 +2191,12 @@ class XianyuLive:
         self.browser_im_degraded = False        # 浏览器起不来时置 True，回退直连
         self.browser_im_last_error = None
         self._browser_im_start_attempts = 0
+
+        # 页内自动滑块（对齐鱼店长 Pro 的 EnableAutoVerify / SliderVerify）
+        self.auto_slider_config = dict(AUTO_SLIDER) if isinstance(AUTO_SLIDER, dict) else {}
+        self.auto_slider_enabled = bool(self.auto_slider_config.get('enabled', True))
+        self.auto_slider_consecutive_failures = 0
+        self.last_auto_slider_result = None
 
         # 浏览器Cookie刷新成功标志
         self.browser_cookie_refreshed = False  # 标记_refresh_cookies_via_browser是否成功更新过数据库
@@ -8282,17 +8288,26 @@ class XianyuLive:
                         except Exception as exc:
                             logger.warning(f"【{self.cookie_id}】自愈后取 token 失败: {self._safe_str(exc)}")
 
-                    # 页面里如果弹出真人验证，有头模式下用户可自行完成；
-                    # 无头模式无法交互，直接返回让上层刷新重试，避免无效滑块循环。
+                    # 自愈未通过 -> 走页内自动滑块（同一会话，真实指针事件）
+                    if self.auto_slider_enabled:
+                        _vurl = ""
+                        _vdata = res_json.get('data')
+                        if isinstance(_vdata, dict):
+                            _vurl = _vdata.get('url') or ''
+                        slider_cookies = await self._browser_auto_slider(_vurl)
+                        if slider_cookies:
+                            return slider_cookies
+
+                    # 页内滑块也没过：有头模式留给人工，无头模式等下一轮刷新自愈
                     if self.browser_im_headless:
                         logger.warning(
                             f"【{self.cookie_id}】无头模式无法完成页内验证，"
-                            f"跳过滑块等待下一轮刷新自愈"
+                            f"跳过页外滑块等待下一轮刷新自愈"
                         )
                         return None
 
                     logger.warning(
-                        f"【{self.cookie_id}】自愈未消除风控，降级到页外滑块（有头模式下也可人工介入）"
+                        f"【{self.cookie_id}】页内滑块未通过，降级到页外滑块（有头模式下也可人工介入）"
                     )
 
             if self.is_manual_refresh_active(self.cookie_id, allow_handoff_recovery=True):
@@ -15906,6 +15921,7 @@ class XianyuLive:
                         cookies_str=cookies_str,
                         headless=self.browser_im_headless,
                         proxy=proxy,
+                        slider_options=self._build_slider_options(),
                     ),
                     timeout=timeout,
                 )
@@ -15939,6 +15955,95 @@ class XianyuLive:
                         f"【{self.cookie_id}】浏览器会话连续 {self._browser_im_start_attempts} 次启动失败，"
                         f"回退到直连 WebSocket 模式（仍可能触发验证码）"
                     )
+            return None
+
+    def _build_slider_options(self) -> Dict[str, Any]:
+        """把 AUTO_SLIDER 配置转成 AutoSlider 的构造参数。"""
+        cfg = self.auto_slider_config or {}
+        return {
+            'max_attempts': int(cfg.get('max_attempts', 3) or 3),
+            'retry_interval_seconds': float(cfg.get('retry_interval_seconds', 5) or 5),
+            'drag_timeout_seconds': float(cfg.get('drag_timeout_seconds', 20) or 20),
+            'headful_manual_wait_seconds': float(cfg.get('headful_manual_wait_seconds', 90) or 90),
+        }
+
+    async def _browser_auto_slider(self, verify_url: str = "") -> Optional[str]:
+        """在常驻浏览器会话里过滑块（对齐鱼店长 Pro 的 EnableAutoVerify）。
+
+        与项目原有页外滑块的差别：
+          * 用的是**同一条已登录会话**的 page/context，cookie 与指纹连续；
+          * 用 Playwright mouse（底层 CDP Input）发真实指针事件，isTrusted=true；
+          * 轨迹为贝塞尔+抖动的拟人曲线，末端有轻微过冲与回退。
+
+        成功返回新的 cookie 串，失败返回 None。
+        """
+        if not self.auto_slider_enabled:
+            logger.info(f"【{self.cookie_id}】自动滑块已关闭（AUTO_SLIDER.enabled=false）")
+            return None
+
+        rt = self.browser_im_runtime
+        if rt is None or not rt.ready or rt.slider is None:
+            logger.warning(f"【{self.cookie_id}】自动滑块不可用：浏览器运行时未就绪")
+            return None
+
+        try:
+            logger.warning(f"【{self.cookie_id}】[自动滑块] 开始页内验证（同会话）")
+            result = await rt.slider.solve(verify_url, user_id=self.myid)
+            self.last_auto_slider_result = result
+
+            if result.get('ok'):
+                self.auto_slider_consecutive_failures = 0
+                cookies = result.get('cookies') or ''
+                if cookies:
+                    self.cookies_str = cookies
+                    self.cookies = trans_cookies(cookies)
+                    try:
+                        db_manager.save_cookie(self.cookie_id, cookies)
+                    except Exception:
+                        pass
+                # 补充：滑块通过后立刻换新 IM token
+                try:
+                    info = await rt.session.get_im_token(device_id=self.device_id)
+                    if info.get('ok') and info.get('token'):
+                        self.current_token = info.get('token')
+                        self.last_token_refresh_time = time.time()
+                        self.last_token_refresh_status = 'success'
+                        self.last_token_refresh_error_message = None
+                        logger.info(f"【{self.cookie_id}】[自动滑块] 已换新 IM token")
+                except Exception as exc:
+                    logger.debug(f"【{self.cookie_id}】[自动滑块] 取 token 失败: {exc}")
+
+                logger.info(
+                    f"【{self.cookie_id}】[自动滑块] ✅ 验证通过（第 {result.get('attempts')} 次，"
+                    f"方式={result.get('reason')}）"
+                )
+                return cookies or self.cookies_str
+
+            self.auto_slider_consecutive_failures += 1
+            reason = result.get('reason') or 'unknown'
+            logger.error(
+                f"【{self.cookie_id}】[自动滑块] ✗ 未通过（{reason}），"
+                f"连续失败 {self.auto_slider_consecutive_failures} 次"
+            )
+
+            # 对齐 RepeatVerifyFailTip：反复失败时提示用户介入
+            if (
+                self.auto_slider_config.get('notify_on_repeat_fail', True)
+                and self.auto_slider_consecutive_failures >= 2
+            ):
+                try:
+                    await self.send_token_refresh_notification(
+                        f"自动滑块连续 {self.auto_slider_consecutive_failures} 次未通过验证"
+                        f"（原因: {reason}）。建议将 BROWSER_IM.headless 设为 false 人工处理一次。",
+                        "auto_slider_repeat_fail"
+                    )
+                except Exception:
+                    pass
+            return None
+
+        except Exception as exc:
+            self.auto_slider_consecutive_failures += 1
+            logger.error(f"【{self.cookie_id}】[自动滑块] 执行异常: {self._safe_str(exc)}")
             return None
 
     async def _browser_im_selfheal(self, reason: str) -> bool:

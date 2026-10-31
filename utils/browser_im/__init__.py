@@ -16,6 +16,7 @@ Python 只做业务逻辑。这是鱼店长 Pro 长期不出验证码的根本�
 from .browser_session import BrowserIMSession, BrowserSessionError
 from .transport import BrowserIMTransport, BrowserWebSocket, Subscription
 from .ws_watchdog import WsDisconnectWatcher
+from .auto_slider import AutoSlider
 from .manager import AccountRuntime, BrowserIMRuntimeManager, runtime_manager
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "BrowserWebSocket",
     "Subscription",
     "WsDisconnectWatcher",
+    "AutoSlider",
     "AccountRuntime",
     "BrowserIMRuntimeManager",
     "runtime_manager",

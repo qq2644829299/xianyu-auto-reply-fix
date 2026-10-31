@@ -161,6 +161,21 @@ BROWSER_IM = config.get('BROWSER_IM', {
     'fallback_to_direct_ws': True,      # 浏览器起不来时回退原直连 WSS 逻辑
 })
 
+# ======================================================================
+# 页内自动滑块（对应「鱼店长Pro」的 EnableAutoVerify / SliderVerify）
+# ======================================================================
+# 关键：滑块在**同一个已登录浏览器会话**里完成，而不是另开浏览器闯验证。
+# 会话态一致，平台才认这次验证；这也是"验证码老过不去"的另一半原因。
+AUTO_SLIDER = config.get('AUTO_SLIDER', {
+    'enabled': True,                       # 自动滑块总开关（对齐 EnableAutoVerify）
+    'max_attempts': 3,                     # 单轮最多尝试次数
+    'retry_interval_seconds': 5,           # 首次重试间隔（逐次递增）
+    'drag_timeout_seconds': 20,            # 单次拖动后等待判定时长
+    'headful_manual_wait_seconds': 90,     # 有头模式下自动失败后留给人工的时长
+    'notify_on_repeat_fail': True,         # 反复失败时通知（对齐 RepeatVerifyFailTip）
+    'rotate_page_before_retry': True,      # 每次重试前刷新验证页拿新 puzzle
+})
+
 _cookies_raw = config.get('COOKIES', [])
 if isinstance(_cookies_raw, list):
     COOKIES_LIST = _cookies_raw

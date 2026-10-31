@@ -825,3 +825,5 @@ test_php_stats.py
 !utils/browser_im/
 !utils/browser_im/*.py
 !tools/verify_browser_im.py
+!tools/verify_auto_slider.py
+!utils/browser_im/auto_slider.py

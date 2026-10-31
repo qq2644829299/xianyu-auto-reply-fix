@@ -10,18 +10,20 @@ from loguru import logger
 from .browser_session import BrowserIMSession, BrowserSessionError
 from .transport import BrowserIMTransport, BrowserWebSocket
 from .ws_watchdog import WsDisconnectWatcher
+from .auto_slider import AutoSlider
 
 
 class AccountRuntime:
-    """一个账号的浏览器运行时三件套。"""
+    """一个账号的浏览器运行时四件套。"""
 
-    __slots__ = ("cookie_id", "session", "transport", "watchdog", "ready")
+    __slots__ = ("cookie_id", "session", "transport", "watchdog", "slider", "ready")
 
     def __init__(self, cookie_id: str) -> None:
         self.cookie_id = cookie_id
         self.session: Optional[BrowserIMSession] = None
         self.transport: Optional[BrowserIMTransport] = None
         self.watchdog: Optional[WsDisconnectWatcher] = None
+        self.slider: Optional[AutoSlider] = None
         self.ready = False
 
     async def start(
@@ -30,6 +32,7 @@ class AccountRuntime:
         *,
         headless: bool = True,
         proxy: Optional[Dict[str, Any]] = None,
+        slider_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         if self.ready:
             return
@@ -44,8 +47,9 @@ class AccountRuntime:
         await self.transport.start()
         self.watchdog = WsDisconnectWatcher(self.session, self.transport)
         self.watchdog.start()
+        self.slider = AutoSlider(self.session, **(slider_options or {}))
         self.ready = True
-        logger.info(f"【{self.cookie_id}】浏览器 IM 运行时就绪")
+        logger.info(f"【{self.cookie_id}】浏览器 IM 运行时就绪（含页内自动滑块）")
 
     async def stop(self) -> None:
         if self.watchdog is not None:
@@ -57,6 +61,7 @@ class AccountRuntime:
         self.watchdog = None
         self.transport = None
         self.session = None
+        self.slider = None
         self.ready = False
         logger.info(f"【{self.cookie_id}】浏览器 IM 运行时已停止")
 
@@ -90,6 +95,7 @@ class BrowserIMRuntimeManager:
         *,
         headless: bool = True,
         proxy: Optional[Dict[str, Any]] = None,
+        slider_options: Optional[Dict[str, Any]] = None,
     ) -> AccountRuntime:
         key = str(cookie_id)
         async with self._lock:
@@ -97,7 +103,12 @@ class BrowserIMRuntimeManager:
             if rt is not None and rt.ready:
                 return rt
             rt = AccountRuntime(key)
-            await rt.start(cookies_str=cookies_str, headless=headless, proxy=proxy)
+            await rt.start(
+                cookies_str=cookies_str,
+                headless=headless,
+                proxy=proxy,
+                slider_options=slider_options,
+            )
             self._items[key] = rt
             return rt
 

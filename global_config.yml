@@ -1,4 +1,4 @@
-API_ENDPOINTS:
+﻿API_ENDPOINTS:
   login_check: https://passport.goofish.com/newlogin/hasLogin.do
   login_user: https://h5api.m.goofish.com/h5/mtop.taobao.idlemessage.pc.loginuser.get/1.0/
   message_headinfo: https://h5api.m.goofish.com/h5/mtop.idle.trade.pc.message.headinfo/1.0/
@@ -116,3 +116,17 @@ BROWSER_IM:
   startup_timeout_seconds: 90     # 等待页面建立 IM WS 的上限
   captcha_selfheal_first: true    # 出验证码先走浏览器自愈，滑块只作保底
   fallback_to_direct_ws: true     # 浏览器起不来时回退原直连逻辑
+
+# ======================================================================
+# 页内自动滑块（对应「鱼店长Pro」的 EnableAutoVerify / SliderVerify）
+# ======================================================================
+# 滑块在同一已登录浏览器会话内完成，cookie 与指纹一致，平台才认这次验证。
+AUTO_SLIDER:
+  enabled: true                    # 自动滑块总开关
+  max_attempts: 3                  # 单轮最多尝试次数
+  retry_interval_seconds: 5        # 首次重试间隔（逐次递增）
+  drag_timeout_seconds: 20         # 单次拖动后等待判定时长
+  headful_manual_wait_seconds: 90  # 有头模式下自动失败后留给人工的时长
+  notify_on_repeat_fail: true      # 反复失败时通知
+  rotate_page_before_retry: true   # 每次重试前刷新验证页拿新 puzzle
+
