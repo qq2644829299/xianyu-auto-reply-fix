@@ -413,12 +413,21 @@ def _check_and_install_playwright():
     return playwright_installed
 
 # 检查并安装Playwright浏览器
-try:
-    _check_and_install_playwright()
-except Exception as e:
-    print(f"{_WARN} Playwright浏览器检查失败: {e}")
-    print("   程序将继续启动，但Playwright功能可能不可用")
-    # 继续启动，不影响主程序运行
+# 桌面客户端用系统浏览器（Edge/Chrome），不需要 Playwright 自带的 chromium：
+#   1) 打包时打不进 Chromium 二进制，装了也白装；
+#   2) 自动安装要下载几百 MB，首次启动会卡住很久；
+#   3) 其 subprocess 读输出在中文 Windows 上还会 UnicodeDecodeError。
+# 因此桌面模式直接跳过，由 browser_session.pick_browser_executable 去找系统浏览器。
+_DESKTOP_CLIENT_MODE = (os.getenv('FISHCLOUD_LOCAL_CLIENT') == '1')
+if _DESKTOP_CLIENT_MODE:
+    print(f"{_INFO} 桌面客户端模式：使用系统浏览器（Edge/Chrome），跳过 Playwright 浏览器检查")
+else:
+    try:
+        _check_and_install_playwright()
+    except Exception as e:
+        print(f"{_WARN} Playwright浏览器检查失败: {e}")
+        print("   程序将继续启动，但Playwright功能可能不可用")
+        # 继续启动，不影响主程序运行
 
 # ==================== 现在可以安全地导入其他模块 ====================
 import asyncio
