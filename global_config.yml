@@ -118,6 +118,8 @@ BROWSER_IM:
   fallback_to_direct_ws: true     # 浏览器起不来时回退原直连逻辑
   reuse_persistent_browser: true  # 复用 utils/persistent_browser 常驻浏览器，避免重复开 Chromium
   executable_path: ''             # 浏览器路径；留空自动探测（容器内为 /usr/bin/chromium）
+  qr_login_in_browser: true      # 扫码走常驻浏览器（同 profile，避免取 cookie 失败）
+  qr_timeout_seconds: 180        # 二维码有效期（秒）
 
 # ======================================================================
 # 页内自动滑块（对应「鱼店长Pro」的 EnableAutoVerify / SliderVerify）
@@ -148,4 +150,5 @@ ACCOUNT_STATE:
   reload_kefu_when_net_break: true    # 断网时重载客服页
   reply_deadline_warn_days: 3         # 授权到期前提醒天数
   login_timeout_seconds: 60           # 单次登录等待上限
+
 

@@ -7033,14 +7033,50 @@ async def delete_account_face_verification_screenshot(
 
 @app.post("/qr-login/generate")
 async def generate_qr_code(current_user: Dict[str, Any] = Depends(get_current_user)):
-    """生成扫码登录二维码"""
+    """生成扫码登录二维码。
+
+    优先走**浏览器内扫码**（二维码在常驻 Chromium 里渲染并截图）：
+    扫完 cookie 天然落在同一个浏览器身份里，不会出现"扫了码但取 cookie 失败"。
+    浏览器通道不可用时自动回退到原有 HTTP 扫码。
+    """
     try:
         log_with_user('info', "请求生成扫码登录二维码", current_user)
 
+        # ---------------- 浏览器内扫码（首选） ----------------
+        try:
+            from config import BROWSER_IM
+            if BROWSER_IM.get('enabled', True) and BROWSER_IM.get('qr_login_in_browser', True):
+                from utils.browser_im import BrowserIMSession
+                from utils.browser_im.browser_qr_login import qr_login_manager_browser
+
+                sess = BrowserIMSession(
+                    cookie_id=f"__qr_{uuid.uuid4().hex[:8]}",
+                    cookies_str="",
+                    headless=bool(BROWSER_IM.get('headless', True)),
+                    navigate_home=False,   # 扫码不需要加载 IM 页
+                )
+                await sess.start()
+                qr = await qr_login_manager_browser.create(
+                    sess, timeout_seconds=float(BROWSER_IM.get('qr_timeout_seconds', 180) or 180)
+                )
+                res = await qr.start()
+                if res.get('success'):
+                    log_with_user('info', f"浏览器扫码二维码已生成: {res['session_id']}", current_user)
+                    res['engine'] = 'browser'
+                    return res
+                # 起不来就清理，回退旧通道
+                await qr_login_manager_browser.drop(qr.session_id)
+                await sess.close()
+                log_with_user('warning', f"浏览器扫码不可用，回退 HTTP 扫码: {res.get('message')}", current_user)
+        except Exception as qr_exc:
+            log_with_user('warning', f"浏览器扫码异常，回退 HTTP 扫码: {qr_exc}", current_user)
+
+        # ---------------- 原有 HTTP 扫码（回退） ----------------
         result = await qr_login_manager.generate_qr_code()
 
         if result['success']:
             log_with_user('info', f"扫码登录二维码生成成功: {result['session_id']}", current_user)
+            result['engine'] = 'http'
         else:
             log_with_user('warning', f"扫码登录二维码生成失败: {result.get('message', '未知错误')}", current_user)
 
@@ -7055,6 +7091,60 @@ async def generate_qr_code(current_user: Dict[str, Any] = Depends(get_current_us
 async def check_qr_code_status(session_id: str, current_user: Dict[str, Any] = Depends(get_current_user)):
     """检查扫码登录状态"""
     try:
+        # ---------------- 浏览器内扫码会话（优先） ----------------
+        try:
+            from utils.browser_im.browser_qr_login import qr_login_manager_browser
+            bqr = qr_login_manager_browser.get(session_id)
+            if bqr is not None:
+                st = await bqr.check()
+                if st.get('status') == 'success':
+                    cookies_str = st.get('cookies') or ''
+                    log_with_user('info', f"浏览器扫码登录成功: {session_id}", current_user)
+                    await qr_login_manager_browser.drop(session_id)
+                    # 落库：项目约定账号 ID 就是 cookie 里的 unb
+                    account_info = {}
+                    try:
+                        from utils.xianyu_utils import trans_cookies
+                        parsed = trans_cookies(cookies_str)
+                        account_id = parsed.get('unb') or ''
+                        if account_id:
+                            from db_manager import db_manager
+                            db_manager.save_cookie(account_id, cookies_str)
+                            account_info = {
+                                'id': account_id,
+                                'cookie_id': account_id,
+                                'unb': account_id,
+                                'cookies': cookies_str,
+                            }
+                            log_with_user('info', f"浏览器扫码 cookie 已保存到账号 {account_id}", current_user)
+                            # 账号已在 DB 里，通知管理器加载并启动任务
+                            try:
+                                if cookie_manager.manager is not None:
+                                    await cookie_manager.manager.load_cookies()
+                            except Exception:
+                                pass
+                        else:
+                            log_with_user('warning', "浏览器扫码成功但 cookie 缺少 unb 字段", current_user)
+                    except Exception as save_exc:
+                        log_with_user('error', f"保存浏览器扫码 cookie 失败: {save_exc}", current_user)
+
+                    return {
+                        'status': 'success',
+                        'message': '扫码登录成功',
+                        'cookies': cookies_str,
+                        'account_info': account_info,
+                        'engine': 'browser',
+                    }
+                if st.get('status') in ('expired', 'error'):
+                    await qr_login_manager_browser.drop(session_id)
+                return {
+                    'status': st.get('status') or 'waiting',
+                    'message': st.get('message') or '',
+                    'engine': 'browser',
+                }
+        except Exception as bqr_exc:
+            log_with_user('debug', f"浏览器扫码状态查询异常: {bqr_exc}", current_user)
+
         # 清理过期记录
         cleanup_qr_check_records()
 

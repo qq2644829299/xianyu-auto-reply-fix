@@ -216,6 +216,7 @@ class BrowserIMSession:
         viewport: Optional[Dict[str, int]] = None,
         attach_context: Optional[Any] = None,
         executable_path: Optional[str] = None,
+        navigate_home: bool = True,
     ) -> None:
         self.cookie_id = cookie_id
         self.cookies_str = cookies_str or ""
@@ -230,6 +231,9 @@ class BrowserIMSession:
         self._attach_context = attach_context
         self._owns_context = attach_context is None
         self.executable_path = executable_path
+        # navigate_home=False：只起浏览器不导航 IM 页（扫码/登录等临时用途，
+        # 避免白白加载一次 IM 页面浪费内存和时间）
+        self.navigate_home = bool(navigate_home)
 
         if user_data_root is None:
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -327,11 +331,13 @@ class BrowserIMSession:
             self._page = await self._ensure_page()
 
             if self._owns_context:
-                await self._navigate_home()
+                if self.navigate_home:
+                    await self._navigate_home()
             else:
                 # 挂载模式：页面多半已经加载过，init script 只对之后生效，
                 # 必须重载一次，WS 劫持才会挂到页面的 WebSocket 构造上。
-                await self._reload_for_attach()
+                if self.navigate_home:
+                    await self._reload_for_attach()
 
             self._started = True
             logger.info(
