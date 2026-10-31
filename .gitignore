@@ -819,4 +819,9 @@ secure_confirm_ultra.py
 secure_freeshipping_ultra.py
 test_php_stats.py
 .playwright-browsers/
-scripts/deploy-production.env
+
+# ==================== 浏览器态 IM 移植（本次改动需随代码提交） ====================
+!docs/BROWSER_IM_MIGRATION.md
+!utils/browser_im/
+!utils/browser_im/*.py
+!tools/verify_browser_im.py

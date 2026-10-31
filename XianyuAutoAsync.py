@@ -22,7 +22,7 @@ from config import (
     TOKEN_REFRESH_INTERVAL, TOKEN_RETRY_INTERVAL,
     SESSION_KEEPALIVE_INTERVAL, SESSION_KEEPALIVE_RETRY_INTERVAL, COOKIES_STR,
     LOG_CONFIG, AUTO_REPLY, DEFAULT_HEADERS, WEBSOCKET_HEADERS,
-    APP_CONFIG, API_ENDPOINTS, YIFAN_API, RISK_CONTROL
+    APP_CONFIG, API_ENDPOINTS, YIFAN_API, RISK_CONTROL, BROWSER_IM
 )
 # from app.logging_config import setup_logging  # 已移除，模块不存在
 import sys
@@ -45,6 +45,28 @@ MANUAL_VERIFICATION_CONTEXTS = {
     'manual_cookie_refresh',
     'manual_refresh',
 }
+
+
+def _has_single_chat_payload(event: dict) -> bool:
+    """浏览器通道订阅过滤器：只挑出带单聊会话体的消息。
+
+    `send_msg_once` / `send_delivery_steps_once` 旧实现各自新建一条 WebSocket
+    并独占其消息流。改为复用页面主连接后，必须靠这个过滤器把非本请求的
+    消息挡掉，避免业务侧 await 到无关包。
+    """
+    try:
+        raw = event.get('data')
+        if not isinstance(raw, str) or not raw:
+            return False
+        body = json.loads(raw)
+        if not isinstance(body, dict):
+            return False
+        inner = body.get('body')
+        if isinstance(inner, dict) and 'singleChatConversation' in inner:
+            return True
+        return 'singleChatConversation' in raw
+    except Exception:
+        return False
 
 
 DELIVERY_BATCH_MAX_UNITS = 10
@@ -1471,7 +1493,16 @@ class XianyuLive:
             self.stream_watchdog_trigger_times.clear()
 
     async def _force_websocket_reconnect(self, reason: str) -> bool:
-        """主动关闭当前WebSocket，让主循环重新建立业务流连接。"""
+        """主动关闭当前WebSocket，让主循环重新建立业务流连接。
+
+        浏览器模式下不关闭页面 WS（那会连带丢失会话态），改为整页刷新：
+        等价鱼店长 Pro 的 `JsWs.RefreshPage(reason)`。
+        """
+        if self._browser_im_enabled() and self.browser_im_runtime is not None:
+            self._set_connection_state(ConnectionState.RECONNECTING, reason)
+            logger.warning(f"【{self.cookie_id}】{reason}，浏览器模式改为整页刷新重建会话")
+            return await self._browser_im_selfheal(reason)
+
         ws = self.ws
         if not ws:
             logger.info(f"【{self.cookie_id}】{reason}，但当前没有活跃的WebSocket连接")
@@ -2140,6 +2171,26 @@ class XianyuLive:
         # 消息接收标识 - 用于控制Cookie刷新
         self.last_message_received_time = 0  # 记录上次收到消息的时间
         self.message_cookie_refresh_cooldown = 300  # 收到消息后5分钟内不执行Cookie刷新
+
+        # ==============================================================
+        # 浏览器态 IM 会话（移植自「鱼店长Pro」）
+        # --------------------------------------------------------------
+        # 逆向结论：鱼店长 Pro 的 IM WebSocket 由 CefSharp 内嵌页面自己建立，
+        # C# 侧只挂回调；token 由页面上下文换取（GetTokenFromWebAsync）；
+        # 断线靠 WsDisconnectWatcher 计时 60 秒后 RefreshPage；
+        # 客服页每 60 分钟整页重载一次。
+        #
+        # 本项目原先由 Python 直连 wss + 15 秒 /! 心跳 + 主动刷 mtop token，
+        # 平台识别为非浏览器客户端，因此反复下发滑块，且滑块常在页外失败。
+        # ==============================================================
+        self.browser_im_config = dict(BROWSER_IM) if isinstance(BROWSER_IM, dict) else {}
+        self.browser_im_enabled = bool(self.browser_im_config.get('enabled', False))
+        self.browser_im_headless = bool(self.browser_im_config.get('headless', True))
+        self.browser_im_runtime = None          # AccountRuntime
+        self.browser_im_lock = asyncio.Lock()
+        self.browser_im_degraded = False        # 浏览器起不来时置 True，回退直连
+        self.browser_im_last_error = None
+        self._browser_im_start_attempts = 0
 
         # 浏览器Cookie刷新成功标志
         self.browser_cookie_refreshed = False  # 标记_refresh_cookies_via_browser是否成功更新过数据库
@@ -7303,6 +7354,64 @@ class XianyuLive:
         raise InitAuthError(f"手动刷新后的Token预检失败，状态: {self.last_token_refresh_status or 'unknown'}")
 
     async def refresh_token(self, captcha_retry_count: int = 0, allow_password_login_recovery: bool = True):
+        # ==============================================================
+        # 浏览器模式：token 由页面上下文换取，不再走进程内 mtop 签名请求
+        # --------------------------------------------------------------
+        # 逆向「鱼店长Pro」确认：它的 `GetTokenFromWebAsync()` 在网页里取 token。
+        # mtop 的 sign 虽可算，但请求指纹（sec-ch-ua / baxia / x5sec / TLS 特征）
+        # 必须由真实浏览器发出，否则直接返回 FAIL_SYS_USER_VALIDATE，
+        # 也就是本账号反复弹验证码、且滑块在页外永远过不去的根因。
+        # ==============================================================
+        if self._browser_im_enabled():
+            rt = self.browser_im_runtime
+            if rt is not None and rt.ready and rt.session is not None:
+                try:
+                    logger.info(f"【{self.cookie_id}】经浏览器上下文刷新 token...")
+                    info = await rt.session.get_im_token(device_id=self.device_id)
+                    if info.get('ok') and info.get('token'):
+                        self.current_token = info.get('token')
+                        self.last_token_refresh_time = time.time()
+                        self.last_token_refresh_status = 'success'
+                        self.last_token_refresh_error_message = None
+                        logger.info(f"【{self.cookie_id}】✅ 浏览器 token 刷新成功")
+
+                        fresh = await rt.session.cookies_to_string()
+                        if fresh:
+                            self.cookies_str = fresh
+                            self.cookies = trans_cookies(fresh)
+                            try:
+                                db_manager.save_cookie(self.cookie_id, fresh)
+                            except Exception:
+                                pass
+                        return self.current_token
+
+                    ret = info.get('ret') or []
+                    self.last_token_refresh_error_message = (
+                        f"浏览器取 token 未成功: {ret or info.get('reason')}"
+                    )
+                    logger.warning(f"【{self.cookie_id}】{self.last_token_refresh_error_message}")
+
+                    # 会话态可能已脏：先刷新页面自愈，再试一次
+                    if self.browser_im_config.get('captcha_selfheal_first', True):
+                        healed = await self._browser_im_selfheal('浏览器取 token 失败')
+                        if healed:
+                            info2 = await rt.session.get_im_token(device_id=self.device_id)
+                            if info2.get('ok') and info2.get('token'):
+                                self.current_token = info2.get('token')
+                                self.last_token_refresh_time = time.time()
+                                self.last_token_refresh_status = 'success'
+                                self.last_token_refresh_error_message = None
+                                logger.info(f"【{self.cookie_id}】✅ 自愈后 token 刷新成功")
+                                return self.current_token
+                except Exception as exc:
+                    logger.error(f"【{self.cookie_id}】浏览器 token 刷新异常: {self._safe_str(exc)}")
+                    self.last_token_refresh_error_message = f'browser_token_exception: {exc}'
+
+                self.last_token_refresh_status = 'browser_token_failed'
+                # 浏览器路径失败时不进入滑块死循环，交给上层重连/刷新页面
+                logger.warning(f"【{self.cookie_id}】浏览器 token 路径失败，跳过滑块流程")
+                return None
+
         if self.token_refresh_lock.locked():
             logger.info(f"【{self.cookie_id}】Token刷新已有执行中任务，等待当前流程完成后复用结果")
 
@@ -8138,9 +8247,53 @@ class XianyuLive:
             return False
 
     async def _handle_captcha_verification(self, res_json: dict) -> str:
-        """处理滑块验证，返回新的cookies字符串"""
+        """处理滑块验证，返回新的cookies字符串。
+
+        浏览器模式下的处理顺序（对齐鱼店长 Pro 的"从不弹滑块"行为）：
+
+            1. 先做会话自愈：整页刷新，让页面用干净上下文重走鉴权；
+            2. 自愈后立刻重试 token，成功就直接返回，**完全不进滑块**；
+            3. 只有自愈 + 重试都失败时，才降级到页外滑块作为保底手段。
+        """
         try:
             logger.info(f"【{self.cookie_id}】开始处理滑块验证...")
+
+            # ---- 1/2. 浏览器自愈优先 ----
+            if self._browser_im_enabled() and self.browser_im_config.get('captcha_selfheal_first', True):
+                rt = self.browser_im_runtime
+                if rt is not None and rt.ready and rt.session is not None:
+                    logger.warning(f"【{self.cookie_id}】检测到风控，优先走浏览器自愈（不直接上滑块）")
+                    log_captcha_event(
+                        self.cookie_id,
+                        "检测到风控，优先浏览器自愈",
+                        res_json.get('data', {}).get('url') if isinstance(res_json.get('data'), dict) else None,
+                        "自愈流程：整页刷新 -> 重新取 token"
+                    )
+                    healed = await self._browser_im_selfheal('风控自愈（滑块前置）')
+                    if healed:
+                        try:
+                            info = await rt.session.get_im_token(device_id=self.device_id)
+                            if info.get('ok') and info.get('token'):
+                                self.current_token = info.get('token')
+                                self.last_token_refresh_time = time.time()
+                                fresh = await rt.session.cookies_to_string()
+                                logger.info(f"【{self.cookie_id}】✅ 浏览器自愈成功，已跳过滑块验证")
+                                return fresh or self.cookies_str
+                        except Exception as exc:
+                            logger.warning(f"【{self.cookie_id}】自愈后取 token 失败: {self._safe_str(exc)}")
+
+                    # 页面里如果弹出真人验证，有头模式下用户可自行完成；
+                    # 无头模式无法交互，直接返回让上层刷新重试，避免无效滑块循环。
+                    if self.browser_im_headless:
+                        logger.warning(
+                            f"【{self.cookie_id}】无头模式无法完成页内验证，"
+                            f"跳过滑块等待下一轮刷新自愈"
+                        )
+                        return None
+
+                    logger.warning(
+                        f"【{self.cookie_id}】自愈未消除风控，降级到页外滑块（有头模式下也可人工介入）"
+                    )
 
             if self.is_manual_refresh_active(self.cookie_id, allow_handoff_recovery=True):
                 logger.warning(f"【{self.cookie_id}】手动刷新进行中，取消自动滑块处理")
@@ -13456,7 +13609,71 @@ class XianyuLive:
         }
         await ws.send(json.dumps(msg))
 
+    def _is_browser_channel(self, ws) -> bool:
+        """`ws` 是否是浏览器通道（`BrowserWebSocket` 替身）。"""
+        try:
+            from utils.browser_im import BrowserWebSocket
+        except Exception:
+            return False
+        return isinstance(ws, BrowserWebSocket)
+
     async def init(self, ws):
+        # 浏览器通道：页面已完成 /reg 注册，这里只补一次 sync 位点。
+        # 重复 /reg 会被服务端当作异常客户端（也是验证码诱因之一）。
+        if self._is_browser_channel(ws):
+            logger.info(f"【{self.cookie_id}】浏览器通道已由页面完成注册，跳过 /reg")
+
+            # 页面可能还挂着旧会话（例如刚扫码换号），把当前 cookie 灌进去对齐
+            try:
+                rt0 = self.browser_im_runtime
+                if rt0 is not None and rt0.session is not None and self.cookies_str:
+                    browser_cookie = await rt0.session.cookies_to_string()
+                    if not browser_cookie or ('unb=' in self.cookies_str and
+                                              f"unb={self.myid}" not in browser_cookie):
+                        await rt0.session.apply_cookies(self.cookies_str, reload_if_changed=True)
+                        rt0.watchdog and rt0.watchdog.on_reconnected()
+            except Exception as exc:
+                logger.debug(f"【{self.cookie_id}】浏览器 cookie 对齐检查失败: {exc}")
+
+            try:
+                current_time = int(time.time() * 1000)
+                await ws.send(json.dumps({
+                    "lwp": "/r/SyncStatus/ackDiff",
+                    "headers": {"mid": generate_mid()},
+                    "body": [
+                        {
+                            "pipeline": "sync",
+                            "tooLong2Tag": "PNM,1",
+                            "channel": "sync",
+                            "topic": "sync",
+                            "highPts": 0,
+                            "pts": current_time * 1000,
+                            "seq": 0,
+                            "timestamp": current_time
+                        }
+                    ]
+                }))
+                logger.info(f'【{self.cookie_id}】浏览器通道 sync 位点已同步')
+            except Exception as exc:
+                logger.warning(f"【{self.cookie_id}】浏览器通道 sync 同步失败（可忽略）: {exc}")
+
+            # 浏览器模式下 token 由页面维护，这里补一份到实例上供业务使用
+            if not self.current_token:
+                try:
+                    rt = self.browser_im_runtime
+                    if rt is not None and rt.session is not None:
+                        info = await rt.session.get_im_token(device_id=self.device_id)
+                        if info.get('ok') and info.get('token'):
+                            self.current_token = info.get('token')
+                            self.last_token_refresh_time = time.time()
+                            self.last_token_refresh_status = 'success'
+                            logger.info(f"【{self.cookie_id}】已从浏览器取得 IM token")
+                except Exception as exc:
+                    logger.debug(f"【{self.cookie_id}】浏览器取 token 失败: {exc}")
+            self.last_init_failure_type = None
+            self.last_init_failure_reason = None
+            return
+
         # 如果没有token或者token过期，获取新token
         token_refresh_attempted = False
         if not self.current_token or (time.time() - self.last_token_refresh_time) >= self.token_refresh_interval:
@@ -13841,6 +14058,57 @@ class XianyuLive:
             pass
         return None
 
+    async def _browser_channel_monitor(self, ws):
+        """浏览器通道的"心跳"：只观测，不发包。
+
+        对齐鱼店长 Pro 的 `WsDisconnectWatcher`：
+            - 页面 WS 正常 -> 什么都不做
+            - 页面 WS 断开 -> 交给看门狗 60 秒宽限后整页刷新
+            - 长时间无任何业务包 -> 判定假在线，刷新页面
+        """
+        rt = self.browser_im_runtime
+        logger.info(f"【{self.cookie_id}】浏览器通道监控已启动（不发送 /! 心跳）")
+
+        last_seen_state = None
+        try:
+            while True:
+                try:
+                    from cookie_manager import manager as cookie_manager
+                    if cookie_manager and not cookie_manager.get_cookie_status(self.cookie_id):
+                        logger.info(f"【{self.cookie_id}】账号已禁用，停止浏览器通道监控")
+                        break
+
+                    if rt is None or not rt.ready or rt.session is None:
+                        logger.warning(f"【{self.cookie_id}】浏览器运行时已失效，退出监控")
+                        break
+
+                    state = await rt.session.im_ws_state()
+                    rs = state.get('readyState', -1)
+
+                    if rs != last_seen_state:
+                        logger.info(f"【{self.cookie_id}】浏览器 IM WS 状态变化: {last_seen_state} -> {rs}")
+                        last_seen_state = rs
+
+                    if rs == 1:
+                        if rt.watchdog is not None and rt.watchdog.is_disconnected:
+                            rt.watchdog.on_reconnected()
+                    elif rs in (3, -1):
+                        if rt.watchdog is not None:
+                            rt.watchdog.on_disconnected(f'readyState={rs}')
+
+                    await self._interruptible_sleep(max(10, self.heartbeat_interval))
+
+                except asyncio.CancelledError:
+                    logger.info(f"【{self.cookie_id}】浏览器通道监控收到取消信号")
+                    raise
+                except Exception as exc:
+                    logger.warning(f"【{self.cookie_id}】浏览器通道监控异常: {self._safe_str(exc)}")
+                    await self._interruptible_sleep(5)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            logger.info(f"【{self.cookie_id}】浏览器通道监控已退出")
+
     async def send_heartbeat(self, ws):
         """发送心跳包"""
         # 检查WebSocket连接状态，如果已关闭则不发送
@@ -13868,7 +14136,16 @@ class XianyuLive:
             raise
 
     async def heartbeat_loop(self, ws):
-        """心跳循环"""
+        """心跳循环。
+
+        浏览器通道下**不发送** `/!` 心跳包：页面自身的 IM 客户端已经维持心跳，
+        再叠加一条进程级心跳会让平台看到"同一会话两个客户端"，是验证码的主要诱因。
+        这里改为纯监控：跟踪页面 WS 状态，把断开事件喂给看门狗。
+        """
+        if self._is_browser_channel(ws) and self.browser_im_config.get('skip_legacy_heartbeat', True):
+            await self._browser_channel_monitor(ws)
+            return
+
         consecutive_failures = 0
         max_failures = 3  # 连续失败3次后停止心跳
 
@@ -15415,10 +15692,33 @@ class XianyuLive:
             logger.warning(f"【{self.cookie_id}】强制关闭时出现异常（已忽略）: {e}")
 
     async def send_msg_once(self, toid, item_id, text):
-        """单次发送消息（创建新的WebSocket连接）"""
-        headers = self._build_websocket_headers()
+        """单次发送消息。
 
+        浏览器模式：**复用页面里已有的 IM WebSocket**，绝不新建连接。
+        逆向结论——鱼店长 Pro 全程只维护一条页面 WS，每次都新建 WSS 会在
+        平台侧留下"多客户端抢同一 cookie"的特征，是验证码高频触发源之一。
+        """
         logger.info(f"【{self.cookie_id}】开始单次发送消息: toid={toid}, item_id={item_id}")
+
+        if self._browser_im_enabled():
+            try:
+                ws = await self._create_websocket_connection(
+                    None,
+                    channel_name='sender',
+                    predicate=_has_single_chat_payload,
+                    shared=True,
+                )
+                async with ws:
+                    result = await self._handle_websocket_connection(ws, toid, item_id, text)
+                if result:
+                    logger.info(f"【{self.cookie_id}】单次发送消息成功（浏览器通道复用）")
+                    return
+                raise Exception("消息发送失败")
+            except Exception as exc:
+                logger.error(f"【{self.cookie_id}】浏览器通道发送消息失败: {self._safe_str(exc)}")
+                raise
+
+        headers = self._build_websocket_headers()
 
         # 兼容不同版本的websockets库
         try:
@@ -15459,10 +15759,30 @@ class XianyuLive:
             raise
 
     async def send_delivery_steps_once(self, toid, item_id, delivery_steps):
-        """单次发送发货步骤（创建新的WebSocket连接）。"""
-        headers = self._build_websocket_headers()
-
+        """单次发送发货步骤（浏览器模式下复用页面主连接）。"""
         logger.info(f"【{self.cookie_id}】开始单次发送发货步骤: toid={toid}, item_id={item_id}, steps={len(delivery_steps or [])}")
+
+        if self._browser_im_enabled():
+            try:
+                ws = await self._create_websocket_connection(
+                    None,
+                    channel_name='delivery',
+                    predicate=_has_single_chat_payload,
+                    shared=True,
+                )
+                async with ws:
+                    result = await self._handle_websocket_connection_steps(
+                        ws, toid, item_id, delivery_steps
+                    )
+                if result:
+                    logger.info(f"【{self.cookie_id}】发货步骤发送成功（浏览器通道复用）")
+                    return
+                raise Exception("发货步骤发送失败")
+            except Exception as exc:
+                logger.error(f"【{self.cookie_id}】浏览器通道发送发货步骤失败: {self._safe_str(exc)}")
+                raise
+
+        headers = self._build_websocket_headers()
 
         try:
             async with websockets.connect(
@@ -15538,8 +15858,189 @@ class XianyuLive:
             logger.error(f"【{self.cookie_id}】WebSocket发货步骤处理异常: {self._safe_str(e)}")
             return False
 
-    async def _create_websocket_connection(self, headers):
-        """创建WebSocket连接，兼容不同版本的websockets库，支持代理配置"""
+    # ==================================================================
+    # 浏览器态 IM 会话（移植自「鱼店长Pro」）
+    # ==================================================================
+
+    def _browser_im_enabled(self) -> bool:
+        """浏览器模式当前是否可用（开关打开且未降级）。"""
+        return bool(self.browser_im_enabled) and not self.browser_im_degraded
+
+    async def _get_browser_im_runtime(self):
+        """惰性启动并返回本账号的浏览器运行时。失败则降级为直连 WSS。"""
+        if self.browser_im_runtime is not None and self.browser_im_runtime.ready:
+            return self.browser_im_runtime
+
+        async with self.browser_im_lock:
+            if self.browser_im_runtime is not None and self.browser_im_runtime.ready:
+                return self.browser_im_runtime
+
+            if self.browser_im_degraded:
+                return None
+
+            self._browser_im_start_attempts += 1
+            cfg = self.browser_im_config
+            timeout = float(cfg.get('startup_timeout_seconds', 90) or 90)
+
+            try:
+                from utils.browser_im import runtime_manager
+            except Exception as exc:
+                self.browser_im_last_error = f'browser_im_import_failed: {exc}'
+                logger.error(f"【{self.cookie_id}】浏览器 IM 模块不可用: {exc}")
+                self.browser_im_degraded = True
+                return None
+
+            # 启动前先把最新 cookie 灌进浏览器，避免用空会话打开页面
+            cookies_str = self.cookies_str or ''
+            proxy = self.proxy_config if self.proxy_config.get('proxy_type', 'none') != 'none' else None
+
+            logger.info(
+                f"【{self.cookie_id}】启动浏览器态 IM 会话 "
+                f"(headless={self.browser_im_headless}, 第{self._browser_im_start_attempts}次)"
+            )
+
+            try:
+                rt = await asyncio.wait_for(
+                    runtime_manager.get_or_start(
+                        self.cookie_id,
+                        cookies_str=cookies_str,
+                        headless=self.browser_im_headless,
+                        proxy=proxy,
+                    ),
+                    timeout=timeout,
+                )
+                self.browser_im_runtime = rt
+
+                # 把浏览器里刷新出来的 cookie 回灌到本实例，供其它 mtop/HTTP 调用使用
+                try:
+                    fresh = await rt.session.cookies_to_string()
+                    if fresh and fresh != self.cookies_str:
+                        self.cookies_str = fresh
+                        self.cookies = trans_cookies(fresh)
+                        logger.info(f"【{self.cookie_id}】已从浏览器同步 cookie（{len(fresh)} 字符）")
+                except Exception as exc:
+                    logger.debug(f"【{self.cookie_id}】同步浏览器 cookie 失败: {exc}")
+
+                logger.info(f"【{self.cookie_id}】✅ 浏览器态 IM 会话就绪，后续消息走浏览器通道")
+                return rt
+
+            except asyncio.TimeoutError:
+                self.browser_im_last_error = f'browser_start_timeout_{timeout}s'
+                logger.error(f"【{self.cookie_id}】启动浏览器会话超时({timeout}s)")
+            except Exception as exc:
+                self.browser_im_last_error = f'browser_start_failed: {exc}'
+                logger.error(f"【{self.cookie_id}】启动浏览器会话失败: {exc}")
+
+            # 第 3 次仍失败才彻底降级，避免偶发启动问题直接放弃浏览器路径
+            if self._browser_im_start_attempts >= 3:
+                if self.browser_im_config.get('fallback_to_direct_ws', True):
+                    self.browser_im_degraded = True
+                    logger.warning(
+                        f"【{self.cookie_id}】浏览器会话连续 {self._browser_im_start_attempts} 次启动失败，"
+                        f"回退到直连 WebSocket 模式（仍可能触发验证码）"
+                    )
+            return None
+
+    async def _browser_im_selfheal(self, reason: str) -> bool:
+        """出验证码/掉线时的浏览器侧自愈：整页刷新换新会话。
+
+        对应鱼店长 Pro 的 `JsWs.RefreshPage(reason)`。
+        """
+        rt = self.browser_im_runtime
+        if rt is None or not rt.ready or rt.session is None:
+            return False
+        try:
+            logger.warning(f"【{self.cookie_id}】[自愈] 触发浏览器刷新: {reason}")
+            ok = await rt.session.reload_page(reason=reason)
+            if ok and rt.watchdog is not None:
+                rt.watchdog.on_reconnected()
+            # 刷新后重新同步 cookie / token
+            try:
+                fresh = await rt.session.cookies_to_string()
+                if fresh:
+                    self.cookies_str = fresh
+                    self.cookies = trans_cookies(fresh)
+            except Exception:
+                pass
+            if ok:
+                try:
+                    token_info = await rt.session.get_im_token(device_id=self.device_id)
+                    if token_info.get('ok') and token_info.get('token'):
+                        self.current_token = token_info.get('token')
+                        self.last_token_refresh_time = time.time()
+                        self.last_token_refresh_status = 'success'
+                        self.last_token_refresh_error_message = None
+                        logger.info(f"【{self.cookie_id}】[自愈] 已从浏览器取得新 IM token")
+                except Exception as exc:
+                    logger.debug(f"【{self.cookie_id}】[自愈] 取 token 失败: {exc}")
+            return ok
+        except Exception as exc:
+            logger.error(f"【{self.cookie_id}】[自愈] 浏览器刷新失败: {exc}")
+            return False
+
+    def browser_im_stats(self) -> Dict[str, Any]:
+        rt = self.browser_im_runtime
+        if rt is None:
+            return {
+                'enabled': self.browser_im_enabled,
+                'degraded': self.browser_im_degraded,
+                'ready': False,
+                'last_error': self.browser_im_last_error,
+            }
+        return rt.stats()
+
+    async def stop_browser_im(self) -> None:
+        """停止并释放本账号的浏览器会话（用于账号禁用/程序退出）。"""
+        rt = self.browser_im_runtime
+        self.browser_im_runtime = None
+        if rt is None:
+            return
+        try:
+            await rt.stop()
+            logger.info(f"【{self.cookie_id}】浏览器 IM 会话已释放")
+        except Exception as exc:
+            logger.warning(f"【{self.cookie_id}】释放浏览器 IM 会话失败: {self._safe_str(exc)}")
+        try:
+            from utils.browser_im import runtime_manager
+            await runtime_manager.stop(self.cookie_id)
+        except Exception:
+            pass
+
+    async def _create_websocket_connection(self, headers, *, channel_name: str = 'primary',
+                                           predicate=None, shared: bool = True):
+        """创建 IM 收发通道。
+
+        浏览器模式（默认）：复用页面里的 IM WebSocket，等价鱼店长 Pro 的
+        `JsWs`——**不新建连接、不发自定义心跳**，这是避免验证码的关键。
+        直连模式：保持原有 websockets 行为作为回退。
+        """
+        if self._browser_im_enabled():
+            rt = await self._get_browser_im_runtime()
+            if rt is not None:
+                try:
+                    ws = rt.make_websocket(name=channel_name, predicate=predicate, shared=shared)
+
+                    # 等页面把 IM WS 建起来；等不到就刷新页面再等一次
+                    ready = await rt.transport.wait_open(timeout=20)
+                    if not ready:
+                        logger.warning(f"【{self.cookie_id}】浏览器 IM WS 未就绪，刷新页面后重试")
+                        await self._browser_im_selfheal('IM WS 未就绪')
+                        ready = await rt.transport.wait_open(timeout=25)
+                    if not ready:
+                        raise ConnectionError('浏览器 IM WebSocket 未能建立')
+                    return ws
+                except Exception as exc:
+                    logger.error(f"【{self.cookie_id}】浏览器通道创建失败: {exc}")
+                    self.browser_im_last_error = f'channel_failed: {exc}'
+                    if not self.browser_im_config.get('fallback_to_direct_ws', True):
+                        raise
+                    self.browser_im_degraded = True
+                    logger.warning(f"【{self.cookie_id}】降级为直连 WebSocket")
+
+        return await self._create_direct_websocket_connection(headers)
+
+    async def _create_direct_websocket_connection(self, headers):
+        """直连 WebSocket（原逻辑保留，作为降级路径）"""
         import websockets
 
         # 获取websockets版本用于调试
@@ -17655,6 +18156,20 @@ class XianyuLive:
             logger.info(f"【{self.cookie_id}】开始启动XianyuLive主程序...")
             await self.create_session()  # 创建session
             logger.info(f"【{self.cookie_id}】Session创建完成，开始WebSocket连接循环...")
+
+            # 浏览器模式：先把常驻会话拉起来。失败会自动降级为直连 WSS。
+            if self._browser_im_enabled():
+                try:
+                    rt = await self._get_browser_im_runtime()
+                    if rt is not None:
+                        logger.info(
+                            f"【{self.cookie_id}】浏览器 IM 会话已接管，"
+                            f"IM WebSocket 由页面维护（不再直连 wss/不发 /! 心跳）"
+                        )
+                    else:
+                        logger.warning(f"【{self.cookie_id}】浏览器 IM 会话不可用，使用直连模式")
+                except Exception as exc:
+                    logger.error(f"【{self.cookie_id}】浏览器 IM 会话启动异常: {self._safe_str(exc)}")
 
             while True:
                 try:

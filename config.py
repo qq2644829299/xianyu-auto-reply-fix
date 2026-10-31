@@ -141,6 +141,26 @@ RISK_CONTROL = config.get('RISK_CONTROL', {
     'soft_auth_token_preflight_timeout_seconds': 5.0,
     'soft_auth_token_preflight_qr_enabled': False,
 })
+# ======================================================================
+# 浏览器态 IM 会话（移植自「鱼店长Pro」的 CefSharp + JS 注入方案）
+# ======================================================================
+# 开启后：IM WebSocket 由常驻浏览器页面建立并维护，Python 只做业务收发。
+# 这是消除"心跳一直出验证码 / 验证码过不去"的根本手段。
+BROWSER_IM = config.get('BROWSER_IM', {
+    'enabled': True,                    # 总开关
+    'headless': True,                   # 无头运行；首次登录/需人工过验证码时设 false
+    'disconnect_grace_seconds': 60,     # 断开后给页面自愈的宽限（鱼店长=60秒）
+    'periodic_refresh_seconds': 3600,   # 客服页周期整页重载（鱼店长=60分钟）
+    'silence_refresh_seconds': 900,     # IM 通道静默多久判定假在线
+    'reload_cooldown_seconds': 90,      # 两次刷新最小间隔
+    'max_reload_per_hour': 8,           # 每小时刷新上限，防刷新风暴
+    'skip_legacy_heartbeat': True,      # 浏览器模式下停发 /! 心跳（页面自己维持）
+    'reuse_single_connection': True,    # 发送消息复用同一条连接，不再每次新建 WSS
+    'startup_timeout_seconds': 90,      # 等待页面建立 IM WS 的上限
+    'captcha_selfheal_first': True,     # 出验证码时先浏览器自愈，滑块仅作保底
+    'fallback_to_direct_ws': True,      # 浏览器起不来时回退原直连 WSS 逻辑
+})
+
 _cookies_raw = config.get('COOKIES', [])
 if isinstance(_cookies_raw, list):
     COOKIES_LIST = _cookies_raw

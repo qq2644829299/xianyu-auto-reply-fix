@@ -1309,6 +1309,43 @@ if not os.path.exists(uploads_dir):
     os.makedirs(uploads_dir, exist_ok=True)
     logger.info(f"创建图片上传目录: {uploads_dir}")
 
+@app.get('/api/browser-im/status')
+async def browser_im_status():
+    """浏览器态 IM 会话状态。
+
+    移植自「鱼店长Pro」的这套机制里，IM 连接由常驻浏览器页面维持，
+    因此排查"是否需要刷新页面 / 验证码是否还在反复"时，看这里最直接：
+
+        transport.state             1=页面 WS 正常，其它值=异常
+        transport.last_message_age  最近一条业务包距今秒数
+        watchdog.disconnected       是否处于断开宽限计时中
+        watchdog.reload_count_1h    一小时内刷新次数（过高说明会话不稳）
+    """
+    try:
+        from utils.browser_im import runtime_manager
+        runtime_stats = runtime_manager.all_stats()
+    except Exception as exc:
+        runtime_stats = {"error": str(exc)}
+
+    instances = {}
+    try:
+        from XianyuAutoAsync import XianyuLive
+        for cid, inst in (getattr(XianyuLive, '_instances', {}) or {}).items():
+            try:
+                instances[cid] = inst.browser_im_stats()
+            except Exception as exc:
+                instances[cid] = {"error": str(exc)}
+    except Exception as exc:
+        instances = {"error": str(exc)}
+
+    return {
+        "success": True,
+        "timestamp": time.time(),
+        "runtime": runtime_stats,
+        "instances": instances,
+    }
+
+
 # 健康检查端点
 @app.get('/health')
 async def health_check():

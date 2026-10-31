@@ -98,3 +98,21 @@ WEBSOCKET_HEADERS:
   User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
     like Gecko) Chrome/133.0.0.0 Safari/537.36
 WEBSOCKET_URL: wss://wss-goofish.dingtalk.com/
+# ======================================================================
+# 浏览器态 IM 会话（移植自「鱼店长Pro」的 CefSharp + JS 注入方案）
+# ======================================================================
+# enabled: 开启后 IM WebSocket 由常驻浏览器页面建立并维护，
+#          Python 侧不再直连 wss、不再自行刷 token，可根除反复弹验证码。
+BROWSER_IM:
+  enabled: true
+  headless: true                  # 首次登录或需要人工过验证码时改 false
+  disconnect_grace_seconds: 60    # 断开后给页面自愈的宽限（对齐鱼店长 60 秒）
+  periodic_refresh_seconds: 3600  # 客服页周期整页重载（对齐鱼店长 60 分钟）
+  silence_refresh_seconds: 900    # IM 通道静默多久判定为假在线
+  reload_cooldown_seconds: 90     # 两次刷新最小间隔
+  max_reload_per_hour: 8          # 每小时刷新上限，防刷新风暴
+  skip_legacy_heartbeat: true     # 浏览器模式下停发 /! 心跳（页面自身维持）
+  reuse_single_connection: true   # 发消息复用同一连接，避免频繁新建 WSS 触发风控
+  startup_timeout_seconds: 90     # 等待页面建立 IM WS 的上限
+  captcha_selfheal_first: true    # 出验证码先走浏览器自愈，滑块只作保底
+  fallback_to_direct_ws: true     # 浏览器起不来时回退原直连逻辑
