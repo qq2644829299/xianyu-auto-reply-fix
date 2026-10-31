@@ -1,4 +1,4 @@
-﻿import os
+import os
 import yaml
 from typing import Dict, Any
 
@@ -176,6 +176,25 @@ AUTO_SLIDER = config.get('AUTO_SLIDER', {
     'headful_manual_wait_seconds': 90,     # 有头模式下自动失败后留给人工的时长
     'notify_on_repeat_fail': True,         # 反复失败时通知（对齐 RepeatVerifyFailTip）
     'rotate_page_before_retry': True,      # 每次重试前刷新验证页拿新 puzzle
+})
+
+# ======================================================================
+# 账号自动登录与状态维护
+# ======================================================================
+# 对应「鱼店长Pro」的 EnableAutoLogin / EnableReloadKefuWhenNetBreak /
+# VerifyRetryMin / ReplyDeadLine：登录在常驻浏览器内完成（填账号密码 → 勾协议
+# → 点登录），凭据加密存 cookies.username/password；会话失效时按退避策略重登。
+ACCOUNT_STATE = config.get('ACCOUNT_STATE', {
+    'auto_login_enabled': True,             # EnableAutoLogin
+    'auto_login_on_startup': True,          # 启动时无有效 cookie 就用凭据登录
+    'relogin_on_session_invalid': True,     # 会话失效时自动重登
+    'max_login_attempts': 3,                # 连续失败上限，超过转人工
+    'login_backoff_seconds': 180,           # 首次失败退避，之后翻倍
+    'login_backoff_max_seconds': 3600,      # 退避上限
+    'verify_retry_min': 15,                 # VerifyRetryMin（分钟）
+    'reload_kefu_when_net_break': True,     # EnableReloadKefuWhenNetBreak
+    'reply_deadline_warn_days': 3,          # ReplyDeadLine 临近提醒
+    'login_timeout_seconds': 60,            # 单次登录等待上限
 })
 
 _cookies_raw = config.get('COOKIES', [])

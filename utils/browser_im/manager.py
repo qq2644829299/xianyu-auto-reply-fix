@@ -11,12 +11,15 @@ from .browser_session import BrowserIMSession, BrowserSessionError
 from .transport import BrowserIMTransport, BrowserWebSocket
 from .ws_watchdog import WsDisconnectWatcher
 from .auto_slider import AutoSlider
+from .auto_login import BrowserAutoLogin
+from .account_state import AccountStateKeeper
 
 
 class AccountRuntime:
-    """一个账号的浏览器运行时四件套。"""
+    """一个账号的浏览器运行时（会话 / 传输 / 看门狗 / 滑块 / 登录 / 状态机）。"""
 
-    __slots__ = ("cookie_id", "session", "transport", "watchdog", "slider", "ready")
+    __slots__ = ("cookie_id", "session", "transport", "watchdog", "slider",
+                 "state", "username", "password", "ready")
 
     def __init__(self, cookie_id: str) -> None:
         self.cookie_id = cookie_id
@@ -24,6 +27,9 @@ class AccountRuntime:
         self.transport: Optional[BrowserIMTransport] = None
         self.watchdog: Optional[WsDisconnectWatcher] = None
         self.slider: Optional[AutoSlider] = None
+        self.state: Optional[AccountStateKeeper] = None
+        self.username: str = ""
+        self.password: str = ""
         self.ready = False
 
     async def start(
@@ -33,11 +39,18 @@ class AccountRuntime:
         headless: bool = True,
         proxy: Optional[Dict[str, Any]] = None,
         slider_options: Optional[Dict[str, Any]] = None,
+        state_options: Optional[Dict[str, Any]] = None,
         prefer_persistent: bool = True,
         executable_path: Optional[str] = None,
+        username: str = "",
+        password: str = "",
     ) -> None:
         if self.ready:
             return
+
+        self.username = (username or "").strip()
+        self.password = password or ""
+        self.state = AccountStateKeeper(self.cookie_id, **(state_options or {}))
 
         # ---------------------------------------------------------------
         # 优先复用项目已有的账号级常驻浏览器（utils/persistent_browser.py）。
@@ -65,8 +78,59 @@ class AccountRuntime:
         self.ready = True
         logger.info(
             f"【{self.cookie_id}】浏览器 IM 运行时就绪"
-            f"（含页内自动滑块，复用常驻浏览器={attach is not None}）"
+            f"（含页内自动滑块/自动登录，复用常驻浏览器={attach is not None}）"
         )
+
+    def has_credentials(self) -> bool:
+        return bool(self.username and self.password)
+
+    async def auto_login(self) -> Dict[str, Any]:
+        """执行四步自动登录并更新状态机。"""
+        if self.session is None or self.state is None:
+            return {"ok": False, "reason": "runtime_not_ready"}
+
+        if not self.has_credentials():
+            self.state.mark("need_qr", "missing_credentials")
+            return {"ok": False, "reason": "missing_credentials", "state": self.state.state}
+
+        if not self.state.can_attempt_login():
+            return {
+                "ok": False,
+                "reason": "backoff",
+                "state": self.state.state,
+                "stats": self.state.stats(),
+            }
+
+        login = BrowserAutoLogin(
+            self.session, self.username, self.password, slider=self.slider
+        )
+        result = await login.login()
+
+        if result.get("ok"):
+            self.state.mark_logged_in(result.get("reason") or "ok")
+            try:
+                await self.session.apply_cookies(
+                    result.get("cookies") or "", reload_if_changed=False
+                )
+            except Exception:
+                pass
+            if self.watchdog is not None:
+                self.watchdog.on_reconnected()
+        else:
+            reason = str(result.get("reason") or "unknown")
+            self.state.mark_from_login_reason(reason)
+            if self.state.state == "verify_required":
+                self.state.record_verify_failure()
+            else:
+                self.state.record_login_failure(reason)
+
+        out = dict(result)
+        out["state"] = self.state.state
+        out["stats"] = self.state.stats()
+        return out
+
+    def state_stats(self) -> Dict[str, Any]:
+        return self.state.stats() if self.state is not None else {}
 
     async def _try_attach_persistent(self, cookies_str: str, headless: bool):
         """尝试拿到账号级常驻 context；拿不到返回 None。"""
@@ -98,6 +162,7 @@ class AccountRuntime:
         self.transport = None
         self.session = None
         self.slider = None
+        self.state = None
         self.ready = False
         logger.info(f"【{self.cookie_id}】浏览器 IM 运行时已停止")
 
@@ -114,6 +179,9 @@ class AccountRuntime:
             out["transport"] = self.transport.stats()
         if self.watchdog is not None:
             out["watchdog"] = self.watchdog.stats()
+        if self.state is not None:
+            out["account"] = self.state.stats()
+        out["has_credentials"] = self.has_credentials()
         return out
 
 
@@ -132,8 +200,11 @@ class BrowserIMRuntimeManager:
         headless: bool = True,
         proxy: Optional[Dict[str, Any]] = None,
         slider_options: Optional[Dict[str, Any]] = None,
+        state_options: Optional[Dict[str, Any]] = None,
         prefer_persistent: bool = True,
         executable_path: Optional[str] = None,
+        username: str = "",
+        password: str = "",
     ) -> AccountRuntime:
         key = str(cookie_id)
         async with self._lock:
@@ -146,8 +217,11 @@ class BrowserIMRuntimeManager:
                 headless=headless,
                 proxy=proxy,
                 slider_options=slider_options,
+                state_options=state_options,
                 prefer_persistent=prefer_persistent,
                 executable_path=executable_path,
+                username=username,
+                password=password,
             )
             self._items[key] = rt
             return rt

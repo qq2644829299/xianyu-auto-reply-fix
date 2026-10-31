@@ -291,3 +291,171 @@ venv\Scripts\python.exe tools\verify_auto_slider.py
 * 想进一步提高通过率：把 `headless` 设为 `false`——有头模式下 canvas/WebGL 指纹更完整，
   且失败时能人工兜底。
 
+
+---
+
+# 九、登录方式与账号状态维护（第三阶段）
+
+## 9.1 逆向依据
+
+`鱼店长Pro` 的登录与账号状态由两个类决定。
+
+**`AgisoIdleClient.Enums.AutoLoginProcedure`** —— 登录就是这四步：
+
+```
+切换账号登录
+勾选隐私条款
+自动输入账号密码
+点击授权并登录
+```
+
+**`AgisoIdleClient.Model.AccountConfig`** —— 账号状态相关开关：
+
+| 配置 | 作用 |
+|---|---|
+| `EnableAutoLogin` / `UserName` / `Password` | 掉线后用账号密码自动重登 |
+| `EnableReloadKefuWhenNetBreak` | 断网时重载客服页，而不是干等 |
+| `EnableAutoVerify` / `EnableAutoVerifyRetry` / `VerifyRetryMin` | 验证失败的重试节奏 |
+| `RepeatVerifyFailTip` | 反复失败的提示文案 |
+
+**`AgisoIdleClient.Interfaces.IUserInfoManager`** —— 账号档案读写：
+
+```
+CurrentUserInfo                 当前账号
+AddOrUpdateAsync(BaseUserInfo)  落账号信息
+GetLoginInfo / SaveLoginInfo    凭据（加密）存取
+UpdateReplyDeadLineAsync        授权到期时间
+```
+
+`BaseUserInfo.ReplyDeadLine` 是关键：**账号授权有期限**，到期后消息链路注定失效。
+这一条本项目以前完全没有管理。
+
+**`MOWMcvTWJOtZwWWYeAs.VY2wYKTmJhYvEBABudV`** 的方法名给出了网页侧执行细节：
+`OnFrameLoadEnd` → `ExecuteScriptsInOrderAsync(js, flow)` → `CheckedAgreementCheckBoxWithRetryAsync`
+→ `EnterLoginInfoAsync(LoginInfo)` → `ClickLoginBtnAsync` → `LoginDoRespondHandleAsync`
+（拦截 `login.do` 响应）→ 成功 `LoginSuccessAsync(BaseUserInfo)` / 失败 `LoginAuthFailAsync`。
+
+## 9.2 与扫码登录的区别
+
+本项目原先只有扫码登录（`utils/qr_login.py`）。扫码的问题是：
+
+* 需要人守着扫，账号一多就是灾难；
+* 掉线后无法自愈，只能等人来重新扫。
+
+鱼店长用**账号密码自动登录**解决这个问题：凭据加密存本地，会话失效就自己重登。
+
+本项目 DB 的 `cookies` 表本来就有 `username` / `password` 列（加密存储），
+`db_manager.update_cookie_account_info()` 已支持写入——基础设施现成，只缺"会用它的登录器"。
+
+## 9.3 实现对照
+
+| 鱼店长Pro | 本次实现 | 文件 |
+|---|---|---|
+| `AutoLoginProcedure.切换账号登录` | `_step_switch_to_password()`（点击后回验表单可见） | `auto_login.py` |
+| `AutoLoginProcedure.勾选隐私条款` | `_step_agree_terms()`（3 次重试，对齐 `...WithRetryAsync`） | `auto_login.py` |
+| `AutoLoginProcedure.自动输入账号密码` | `_step_fill_credentials()` + `_human_type()` 逐字符键入 | `auto_login.py` |
+| `AutoLoginProcedure.点击授权并登录` | `_step_submit()` | `auto_login.py` |
+| `LoginDoResponse.Content.Data.LoginResult` | `_judge_payloads()` 解析拦截到的响应 | `auto_login.py` |
+| `OnFrameLoadEnd` | `page.goto(wait_until="domcontentloaded")` | `auto_login.py` |
+| `LoginAuthFailAsync` | 失败原因映射到账号状态 | `account_state.py` |
+| `EnableAutoLogin` | `ACCOUNT_STATE.auto_login_enabled` | `config.py` |
+| `EnableReloadKefuWhenNetBreak` | `WsDisconnectWatcher` 整页刷新 | `ws_watchdog.py` |
+| `VerifyRetryMin` | `AccountStateKeeper.verify_retry_min` | `account_state.py` |
+| `RepeatVerifyFailTip` | 连续失败通知 | `_browser_auto_slider` / `_try_browser_auto_login` |
+| `IUserInfoManager.SaveLoginInfo` | `db_manager.update_cookie_account_info` | `XianyuAutoAsync._save_login_credentials` |
+| `BaseUserInfo.ReplyDeadLine` | `judge_reply_deadline()` | `account_state.py` |
+
+## 9.4 账号状态机
+
+状态与含义：
+
+| 状态 | 含义 | 能否自动恢复 |
+|---|---|---|
+| `logged_in` | 会话正常 | — |
+| `expired` | 会话过期 | 可（自动重登） |
+| `verify_required` | 需过验证 | 可（页内滑块） |
+| `disconnected` | 连接断开 | 可（刷新/重连） |
+| `password_error` | 账号或密码错 | 否（终态，需人工改凭据） |
+| `account_locked` | 账号被限制 | 否（终态） |
+| `account_not_exist` | 账号不存在 | 否（终态） |
+| `reply_expired` | 回复授权到期 | 否（需续期） |
+| `need_qr` | 无凭据 | 否（扫码） |
+
+**退避策略**（这是避免被风控的关键）：
+
+```
+第 1 次失败 -> 等 180s
+第 2 次失败 -> 等 360s
+第 3 次失败 -> 等 720s（上限 3600s）
+超过 max_login_attempts -> 停止，转人工并通知
+验证失败 -> 按 VerifyRetryMin（默认 15 分钟）排队
+```
+
+以前"一失效就疯狂重连"恰恰是最容易被判定为异常客户端的模式。
+
+## 9.5 接入点
+
+| 位置 | 行为 |
+|---|---|
+| `main()` 启动 | cookie 为空或会话无效且已配凭据 → 立即自动登录 |
+| `refresh_token()` 浏览器路径失败 | 触发自动重登（`relogin_on_session_invalid`） |
+| `_handle_captcha_verification()` | 自愈 → 页内滑块 → 人工/等下一轮 |
+| `WsDisconnectWatcher` | 60s 宽限 + 周期刷新（`EnableReloadKefuWhenNetBreak`） |
+
+## 9.6 配置
+
+```yaml
+ACCOUNT_STATE:
+  auto_login_enabled: true            # 自动登录总开关
+  auto_login_on_startup: true         # 启动时无有效 cookie 就用凭据登录
+  relogin_on_session_invalid: true    # 会话失效时自动重登
+  max_login_attempts: 3               # 连续失败上限，超过转人工
+  login_backoff_seconds: 180          # 首次失败退避，之后翻倍
+  login_backoff_max_seconds: 3600     # 退避上限
+  verify_retry_min: 15                # VerifyRetryMin（分钟）
+  reload_kefu_when_net_break: true    # 断网时重载客服页
+  reply_deadline_warn_days: 3         # 授权到期前提醒天数
+  login_timeout_seconds: 60           # 单次登录等待上限
+```
+
+**怎么给账号配凭据**：在管理面板账号设置里填 `username` / `password`（写入
+`cookies` 表，加密存储）。填了之后会话失效即自动重登；不填则维持扫码模式。
+
+## 9.7 验证
+
+```bash
+venv\Scripts\python.exe tools\verify_auto_login.py
+```
+
+自检用本地构造的登录页（扫码 tab + 密码 tab + 协议勾选 + 结果校验），**19 项全通过**：
+
+```
+[PASS] 状态迁移 / 需要登录 / 允许尝试 / 失败计入退避 / 超限后禁止 / 终态判定
+[PASS] 登录成功清零 / 验证退避 / 授权已过期 / 授权临近 / 授权正常
+[PASS] 步骤1 切换到密码登录  ['切换账号登录', '勾选隐私条款', '自动输入账号密码', '点击授权并登录']
+[PASS] 步骤2 勾选协议 / 步骤3 输入账号密码 / 步骤4 点击登录
+[PASS] 页面确认登录成功 / 登录结果 ok / cookie 已产出
+[PASS] 密码错误被识别 reason=password_error
+```
+
+运行时日志：
+
+```
+【账号】[自动登录] 开始四步登录（账号=138****89）
+【账号】[自动登录] 1/4 已切换到账号密码登录
+【账号】[自动登录] 2/4 已勾选隐私条款
+【账号】[自动登录] 3/4 已填入账号密码
+【账号】[自动登录] 4/4 已点击登录
+【账号】[自动登录] 成功，昵称=xxx
+```
+
+## 9.8 注意事项
+
+1. **凭据安全**：`password` 走 `db_manager._encrypt_secret` 加密，密钥在
+   `data/.secret_encryption.key`。换机部署要一并迁移该密钥，否则旧密码解不开。
+2. **首次建议有头**：第一次自动登录把 `headless` 设 `false`，确认选择器对得上
+   当前登录页版本；成功一次后再转 `true`。
+3. **登录页改版**：`auto_login.py` 顶部的选择器表是集中维护的，改版时改那几组常量即可。
+4. **不要频繁重登**：退避参数不要调小。平台对"短时间多次登录"很敏感。
+5. **终态不重试**：`password_error` / `account_locked` 这类会直接停手并发通知，
+   继续重试只会加重风控。

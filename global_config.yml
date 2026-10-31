@@ -132,4 +132,20 @@ AUTO_SLIDER:
   notify_on_repeat_fail: true      # 反复失败时通知
   rotate_page_before_retry: true   # 每次重试前刷新验证页拿新 puzzle
 
+# ======================================================================
+# 账号自动登录与状态维护（对应 EnableAutoLogin / EnableReloadKefuWhenNetBreak）
+# ======================================================================
+# 登录在常驻浏览器内完成：切账号密码登录 -> 勾隐私条款 -> 填账号密码 -> 点登录。
+# 凭据加密存 cookies.username / cookies.password，会话失效时按退避策略重登。
+ACCOUNT_STATE:
+  auto_login_enabled: true            # 自动登录总开关（EnableAutoLogin）
+  auto_login_on_startup: true         # 启动时无有效 cookie 就用凭据登录
+  relogin_on_session_invalid: true    # 会话失效时自动重登
+  max_login_attempts: 3               # 连续失败上限，超过转人工
+  login_backoff_seconds: 180          # 首次失败退避，之后翻倍
+  login_backoff_max_seconds: 3600     # 退避上限
+  verify_retry_min: 15                # VerifyRetryMin（分钟）
+  reload_kefu_when_net_break: true    # 断网时重载客服页
+  reply_deadline_warn_days: 3         # 授权到期前提醒天数
+  login_timeout_seconds: 60           # 单次登录等待上限
 

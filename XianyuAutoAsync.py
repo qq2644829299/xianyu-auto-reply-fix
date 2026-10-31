@@ -22,7 +22,8 @@ from config import (
     TOKEN_REFRESH_INTERVAL, TOKEN_RETRY_INTERVAL,
     SESSION_KEEPALIVE_INTERVAL, SESSION_KEEPALIVE_RETRY_INTERVAL, COOKIES_STR,
     LOG_CONFIG, AUTO_REPLY, DEFAULT_HEADERS, WEBSOCKET_HEADERS,
-    APP_CONFIG, API_ENDPOINTS, YIFAN_API, RISK_CONTROL, BROWSER_IM, AUTO_SLIDER
+    APP_CONFIG, API_ENDPOINTS, YIFAN_API, RISK_CONTROL, BROWSER_IM, AUTO_SLIDER,
+    ACCOUNT_STATE
 )
 # from app.logging_config import setup_logging  # 已移除，模块不存在
 import sys
@@ -2197,6 +2198,11 @@ class XianyuLive:
         self.auto_slider_enabled = bool(self.auto_slider_config.get('enabled', True))
         self.auto_slider_consecutive_failures = 0
         self.last_auto_slider_result = None
+
+        # 账号自动登录与状态维护（对齐 EnableAutoLogin / EnableReloadKefuWhenNetBreak）
+        self.account_state_config = dict(ACCOUNT_STATE) if isinstance(ACCOUNT_STATE, dict) else {}
+        self.auto_login_enabled = bool(self.account_state_config.get('auto_login_enabled', True))
+        self.last_auto_login_result = None
 
         # 浏览器Cookie刷新成功标志
         self.browser_cookie_refreshed = False  # 标记_refresh_cookies_via_browser是否成功更新过数据库
@@ -7414,7 +7420,11 @@ class XianyuLive:
                     self.last_token_refresh_error_message = f'browser_token_exception: {exc}'
 
                 self.last_token_refresh_status = 'browser_token_failed'
-                # 浏览器路径失败时不进入滑块死循环，交给上层重连/刷新页面
+                # 会话已失效：按鱼店长 EnableAutoLogin 的语义，用账号密码在
+                # 常驻浏览器里重新登录，而不是继续在滑块里打转。
+                if self.account_state_config.get('relogin_on_session_invalid', True):
+                    if await self._try_browser_auto_login('token 刷新失败'):
+                        return self.current_token
                 logger.warning(f"【{self.cookie_id}】浏览器 token 路径失败，跳过滑块流程")
                 return None
 
@@ -15915,6 +15925,7 @@ class XianyuLive:
             )
 
             try:
+                _uname, _upass = self._load_login_credentials()
                 rt = await asyncio.wait_for(
                     runtime_manager.get_or_start(
                         self.cookie_id,
@@ -15922,8 +15933,11 @@ class XianyuLive:
                         headless=self.browser_im_headless,
                         proxy=proxy,
                         slider_options=self._build_slider_options(),
+                        state_options=self._build_state_options(),
                         prefer_persistent=bool(self.browser_im_config.get('reuse_persistent_browser', True)),
                         executable_path=self.browser_im_config.get('executable_path') or None,
+                        username=_uname,
+                        password=_upass,
                     ),
                     timeout=timeout,
                 )
@@ -15968,6 +15982,123 @@ class XianyuLive:
             'drag_timeout_seconds': float(cfg.get('drag_timeout_seconds', 20) or 20),
             'headful_manual_wait_seconds': float(cfg.get('headful_manual_wait_seconds', 90) or 90),
         }
+
+    def _build_state_options(self) -> Dict[str, Any]:
+        """把 ACCOUNT_STATE 配置转成 AccountStateKeeper 的构造参数。"""
+        cfg = self.account_state_config or {}
+        return {
+            'max_login_attempts': int(cfg.get('max_login_attempts', 3) or 3),
+            'login_backoff_seconds': float(cfg.get('login_backoff_seconds', 180) or 180),
+            'login_backoff_max_seconds': float(cfg.get('login_backoff_max_seconds', 3600) or 3600),
+            'verify_retry_min': float(cfg.get('verify_retry_min', 15) or 15),
+        }
+
+    def _load_login_credentials(self) -> tuple:
+        """从 DB 取账号密码（对齐鱼店长 LoginInfo 持久化）。"""
+        try:
+            details = db_manager.get_cookie_details(self.cookie_id) or {}
+            return (details.get('username') or '', details.get('password') or '')
+        except Exception as exc:
+            logger.debug(f"【{self.cookie_id}】读取账号密码失败: {exc}")
+            return ('', '')
+
+    def _save_login_credentials(self, username: str, password: str) -> None:
+        try:
+            db_manager.update_cookie_account_info(
+                self.cookie_id, username=username, password=password
+            )
+            logger.info(f"【{self.cookie_id}】账号密码已保存（加密存储）")
+        except Exception as exc:
+            logger.warning(f"【{self.cookie_id}】保存账号密码失败: {exc}")
+
+    async def _try_browser_auto_login(self, reason: str = "") -> bool:
+        """会话失效时用账号密码在常驻浏览器里自动重新登录。
+
+        对齐鱼店长 Pro 的 EnableAutoLogin：登录全程在同一个持久化浏览器内完成，
+        成功后 cookie 天然留在 profile 里，不需要再搬运。
+        """
+        if not self.auto_login_enabled:
+            return False
+        if not self._browser_im_enabled():
+            return False
+
+        rt = self.browser_im_runtime
+        if rt is None or not rt.ready:
+            logger.info(f"【{self.cookie_id}】自动登录跳过：浏览器运行时未就绪")
+            return False
+
+        if not rt.has_credentials():
+            logger.warning(
+                f"【{self.cookie_id}】自动登录跳过：未配置账号密码，请扫码登录或补充凭据"
+            )
+            return False
+
+        state = rt.state
+        if state is not None and not state.can_attempt_login():
+            if state.is_terminal:
+                logger.warning(
+                    f"【{self.cookie_id}】自动登录跳过：账号处于 {state.state}（{state.describe()}），需人工处理"
+                )
+            else:
+                logger.info(
+                    f"【{self.cookie_id}】自动登录退避中，{int(state.stats().get('next_login_in', 0))}s 后再试"
+                )
+            return False
+
+        try:
+            logger.warning(
+                f"【{self.cookie_id}】[自动登录] 触发浏览器内重新登录"
+                + (f"（原因: {reason}）" if reason else "")
+            )
+            result = await rt.auto_login()
+            self.last_auto_login_result = result
+
+            if result.get('ok'):
+                fresh = result.get('cookies') or ''
+                if fresh:
+                    self.cookies_str = fresh
+                    self.cookies = trans_cookies(fresh)
+                    try:
+                        db_manager.save_cookie(self.cookie_id, fresh)
+                    except Exception:
+                        pass
+                # 登录成功后立刻换新 IM token
+                try:
+                    info = await rt.session.get_im_token(device_id=self.device_id)
+                    if info.get('ok') and info.get('token'):
+                        self.current_token = info.get('token')
+                        self.last_token_refresh_time = time.time()
+                        self.last_token_refresh_status = 'success'
+                        self.last_token_refresh_error_message = None
+                except Exception as exc:
+                    logger.debug(f"【{self.cookie_id}】[自动登录] 取 token 失败: {exc}")
+
+                user_info = result.get('user_info') or {}
+                logger.info(
+                    f"【{self.cookie_id}】[自动登录] 成功"
+                    + (f"，昵称={user_info.get('nick_name')}" if user_info.get('nick_name') else "")
+                )
+                return True
+
+            st = result.get('state') or ''
+            logger.error(
+                f"【{self.cookie_id}】[自动登录] 失败: {result.get('reason')}（状态={st}）"
+            )
+            # 终态需要人工介入，发一次通知就停手
+            if st in ('account_locked', 'account_not_exist', 'password_error', 'need_qr'):
+                try:
+                    await self.send_token_refresh_notification(
+                        f"账号自动登录失败：{result.get('reason')}。"
+                        f"请检查账号密码或在面板重新登录。",
+                        "auto_login_terminal"
+                    )
+                except Exception:
+                    pass
+            return False
+
+        except Exception as exc:
+            logger.error(f"【{self.cookie_id}】[自动登录] 异常: {self._safe_str(exc)}")
+            return False
 
     async def _browser_auto_slider(self, verify_url: str = "") -> Optional[str]:
         """在常驻浏览器会话里过滑块（对齐鱼店长 Pro 的 EnableAutoVerify）。
@@ -16047,6 +16178,21 @@ class XianyuLive:
             self.auto_slider_consecutive_failures += 1
             logger.error(f"【{self.cookie_id}】[自动滑块] 执行异常: {self._safe_str(exc)}")
             return None
+
+    async def _browser_session_alive(self, rt) -> bool:
+        """判断浏览器会话是否真的已登录。
+
+        只看 cookie 名不看值：`unb` 是用户 ID，`cookie2`/`sgcookie`/`_tb_token_`
+        是登录态凭据，四者同时具备才算真登录，避免"有 cookie 但已过期"的误判。
+        """
+        try:
+            cookies = await rt.session.dump_cookies()
+            names = {c.get('name') for c in cookies}
+            if 'unb' not in names:
+                return False
+            return bool(names & {'cookie2', 'sgcookie', '_tb_token_', '_m_h5_tk'})
+        except Exception:
+            return False
 
     async def _browser_im_selfheal(self, reason: str) -> bool:
         """出验证码/掉线时的浏览器侧自愈：整页刷新换新会话。
@@ -18273,6 +18419,19 @@ class XianyuLive:
                             f"【{self.cookie_id}】浏览器 IM 会话已接管，"
                             f"IM WebSocket 由页面维护（不再直连 wss/不发 /! 心跳）"
                         )
+                        # 对齐 EnableAutoLogin：启动时若会话不可用，直接用凭据登录
+                        if self.account_state_config.get('auto_login_on_startup', True):
+                            need_login = not (self.cookies_str or '').strip()
+                            if not need_login:
+                                try:
+                                    need_login = not await self._browser_session_alive(rt)
+                                except Exception:
+                                    need_login = False
+                            if need_login and rt.has_credentials():
+                                logger.warning(
+                                    f"【{self.cookie_id}】会话不可用且已配置账号密码，启动时自动登录"
+                                )
+                                await self._try_browser_auto_login('启动时会话无效')
                     else:
                         logger.warning(f"【{self.cookie_id}】浏览器 IM 会话不可用，使用直连模式")
                 except Exception as exc:
