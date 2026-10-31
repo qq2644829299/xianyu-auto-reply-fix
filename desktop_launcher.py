@@ -56,6 +56,8 @@ def prepare_local_runtime() -> Path:
     data_root.mkdir(parents=True, exist_ok=True)
     (data_root / 'data').mkdir(exist_ok=True)
     (data_root / 'logs').mkdir(exist_ok=True)
+    browser_root = data_root / 'browser_data' / 'im_sessions'
+    browser_root.mkdir(parents=True, exist_ok=True)
 
     # 已有项目仍有少量相对路径；切换到用户目录能确保其写入本机而不是安装包。
     os.chdir(data_root)
@@ -64,6 +66,16 @@ def prepare_local_runtime() -> Path:
     os.environ['API_PORT'] = str(LOCAL_PORT)
     os.environ['DB_PATH'] = str(data_root / 'data' / 'xianyu_data.db')
     os.environ.setdefault('SQL_LOG_ENABLED', 'false')
+
+    # ---- 形态 B：桌面客户端承担全部浏览器工作 ----
+    # desktop 模式允许启用浏览器兜底；server 模式才会禁用。
+    os.environ.setdefault('DEPLOY_MODE', 'desktop')
+    # 有头运行：验证码/滑块需要人眼确认，且真实窗口的指纹远比无头可信。
+    # 用环境变量覆盖打包进 exe 的 global_config.yml，避免每次升级配置被重置。
+    os.environ.setdefault('XY_BROWSER_HEADLESS', '0')
+    # 浏览器 profile 落到用户目录，升级/重装不丢登录态。
+    os.environ.setdefault('FISHCLOUD_BROWSER_DATA', str(browser_root))
+
     if str(app_root) not in sys.path:
         sys.path.insert(0, str(app_root))
     return data_root

@@ -832,3 +832,6 @@ test_php_stats.py
 !tools/verify_auto_login.py
 !utils/browser_im/browser_qr_login.py
 !tools/verify_browser_qr.py
+!utils/mtop_order_api.py
+!desktop_launcher.py
+!desktop/

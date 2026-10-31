@@ -147,13 +147,6 @@ except Exception as e:
 def _check_and_install_playwright():
     """检查Playwright浏览器是否存在，如果不存在则自动安装"""
     print("检查Playwright浏览器...")
-
-    # Docker 镜像可直接复用系统 Chromium，避免每次首次启动都从
-    # Playwright CDN 下载浏览器包。扫码模块会读取同一个环境变量。
-    system_chromium = os.getenv('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', '').strip()
-    if system_chromium and Path(system_chromium).exists():
-        print(f"{_OK} 使用系统 Chromium: {system_chromium}")
-        return True
     
     # 检查是否安装了playwright模块
     try:
@@ -161,32 +154,6 @@ def _check_and_install_playwright():
     except ImportError:
         print(f"{_WARN} Playwright模块未安装，跳过浏览器检查")
         return False
-
-    def _run_playwright_install():
-        """安装 Chromium；冻结后的桌面程序不能再次用自身执行 -m playwright。"""
-        import subprocess
-
-        creation_flags = 0
-        if sys.platform == 'win32' and hasattr(subprocess, 'CREATE_NO_WINDOW'):
-            creation_flags = subprocess.CREATE_NO_WINDOW
-
-        command = [sys.executable, '-m', 'playwright', 'install', 'chromium']
-        if getattr(sys, 'frozen', False):
-            driver_dir = Path(playwright.__file__).resolve().parent / 'driver'
-            node = driver_dir / ('node.exe' if sys.platform == 'win32' else 'node')
-            cli = driver_dir / 'package' / 'cli.js'
-            if node.exists() and cli.exists():
-                command = [str(node), str(cli), 'install', 'chromium']
-            else:
-                raise RuntimeError('本地客户端缺少 Playwright 安装程序')
-
-        return subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=600,
-            creationflags=creation_flags,
-        )
     
     # 检查Playwright浏览器是否存在
     playwright_installed = False
@@ -362,7 +329,13 @@ def _check_and_install_playwright():
                 if sys.platform == 'win32' and hasattr(subprocess, 'CREATE_NO_WINDOW'):
                     creation_flags = subprocess.CREATE_NO_WINDOW
                 
-                result = _run_playwright_install()
+                result = subprocess.run(
+                    [sys.executable, '-m', 'playwright', 'install', 'chromium'],
+                    capture_output=True,
+                    text=True,
+                    timeout=600,  # 10分钟超时
+                    creationflags=creation_flags
+                )
                 
                 if result.returncode == 0:
                     print(f"{_OK} Playwright浏览器安装成功")
@@ -384,7 +357,13 @@ def _check_and_install_playwright():
                 if sys.platform == 'win32' and hasattr(subprocess, 'CREATE_NO_WINDOW'):
                     creation_flags = subprocess.CREATE_NO_WINDOW
                 
-                result = _run_playwright_install()
+                result = subprocess.run(
+                    [sys.executable, '-m', 'playwright', 'install', 'chromium'],
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    creationflags=creation_flags
+                )
                 
                 if result.returncode == 0:
                     print(f"{_OK} Playwright浏览器安装成功（通过命令行）")
@@ -400,7 +379,13 @@ def _check_and_install_playwright():
             except ImportError:
                 # 如果playwright模块不可用，尝试使用subprocess
                 import subprocess
-                result = _run_playwright_install()
+                result = subprocess.run(
+                    [sys.executable, '-m', 'playwright', 'install', 'chromium'],
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' and hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                )
                 
                 if result.returncode == 0:
                     print(f"{_OK} Playwright浏览器安装成功")
@@ -461,25 +446,23 @@ def _start_api_server():
     """后台线程启动 FastAPI 服务"""
     api_conf = AUTO_REPLY.get('api', {})
 
-    # 优先使用环境变量配置
-    host = os.getenv('API_HOST', '0.0.0.0')  # 默认绑定所有接口
-    port = int(os.getenv('API_PORT', '8090'))  # 默认端口8090
+    # 环境变量优先：桌面版需要动态端口，而 global_config.yml 是打包进 exe 的，
+    # 若让配置覆盖环境变量，桌面客户端永远只能跑在 8090 上（会和本机其它服务撞车）。
+    # 服务器上不设置这两个环境变量，行为与之前完全一致。
+    env_host = (os.getenv('API_HOST') or '').strip()
+    env_port = (os.getenv('API_PORT') or '').strip()
 
-    # 本地客户端不对局域网或公网开放管理入口。它只在用户电脑上提供
-    # localhost 服务，由桌面启动器自动打开；闲鱼登录和消息连接也留在本机。
-    local_client_mode = os.getenv('FISHCLOUD_LOCAL_CLIENT', '').strip().lower() in {'1', 'true', 'yes', 'on'}
-    if local_client_mode:
-        host = '127.0.0.1'
-        port = int(os.getenv('API_PORT', '18790'))
-    else:
-        # 如果配置文件中有特定配置，则使用配置文件
-        if 'host' in api_conf:
-            host = api_conf['host']
-        if 'port' in api_conf:
-            port = api_conf['port']
+    host = env_host or '0.0.0.0'   # 默认绑定所有接口
+    port = int(env_port) if env_port.isdigit() else 8090
+
+    # 配置文件兜底（环境变量未提供时才采用）
+    if not env_host and 'host' in api_conf:
+        host = api_conf['host']
+    if not env_port and 'port' in api_conf:
+        port = api_conf['port']
 
     # 兼容旧的URL配置方式
-    if 'url' in api_conf and 'host' not in api_conf and 'port' not in api_conf:
+    if not env_port and 'url' in api_conf and 'host' not in api_conf and 'port' not in api_conf:
         url = api_conf.get('url', 'http://0.0.0.0:8090/xianyu/reply')
         parsed = urlparse(url)
         if parsed.hostname and parsed.hostname != 'localhost':

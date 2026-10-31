@@ -246,8 +246,12 @@ class BrowserIMSession:
         self.navigate_home = bool(navigate_home)
 
         if user_data_root is None:
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            user_data_root = os.path.join(project_root, "browser_data", "im_sessions")
+            # 桌面版（PyInstaller）里 __file__ 指向安装目录，通常只读或会被升级覆盖，
+            # 浏览器 profile 必须落到用户可写目录，否则登录态每次更新都丢。
+            user_data_root = (os.environ.get("FISHCLOUD_BROWSER_DATA") or "").strip()
+            if not user_data_root:
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                user_data_root = os.path.join(project_root, "browser_data", "im_sessions")
         self.user_data_dir = os.path.join(user_data_root, str(cookie_id))
         os.makedirs(self.user_data_dir, exist_ok=True)
 

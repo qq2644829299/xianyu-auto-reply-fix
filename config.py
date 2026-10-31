@@ -186,6 +186,13 @@ AUTO_SLIDER = config.get('AUTO_SLIDER', {
 # 对应「鱼店长Pro」的 EnableAutoLogin / EnableReloadKefuWhenNetBreak /
 # VerifyRetryMin / ReplyDeadLine：登录在常驻浏览器内完成（填账号密码 → 勾协议
 # → 点登录），凭据加密存 cookies.username/password；会话失效时按退避策略重登。
+# 桌面版覆盖：有头才能人工过验证、指纹也更真实。
+# 用环境变量而不是改配置，避免打包进 exe 的 global_config.yml 被污染。
+if (os.environ.get('XY_BROWSER_HEADLESS', '').strip() in ('0', 'false', 'False', 'no')):
+    BROWSER_IM['headless'] = False
+if (os.environ.get('XY_IM_BROWSER_PATH', '').strip()):
+    BROWSER_IM['executable_path'] = os.environ['XY_IM_BROWSER_PATH'].strip()
+
 ACCOUNT_STATE = config.get('ACCOUNT_STATE', {
     'auto_login_enabled': True,             # EnableAutoLogin
     'auto_login_on_startup': True,          # 启动时无有效 cookie 就用凭据登录
@@ -216,3 +223,4 @@ else:
 # desktop : 桌面客户端承担浏览器相关全部工作（登录/扫码/滑块/抓页面）
 # 由环境变量 DEPLOY_MODE 或本配置控制，默认 desktop（保持原行为）。
 DEPLOY_MODE = (os.environ.get('DEPLOY_MODE') or config.get('DEPLOY_MODE', 'desktop') or 'desktop').strip().lower()
+
