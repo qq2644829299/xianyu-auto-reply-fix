@@ -18,6 +18,7 @@ from .transport import BrowserIMTransport, BrowserWebSocket, Subscription
 from .ws_watchdog import WsDisconnectWatcher
 from .auto_slider import AutoSlider
 from .auto_login import BrowserAutoLogin, AutoLoginResult
+from .browser_qr_login import BrowserQRLogin, BrowserQRLoginManager, qr_login_manager_browser
 from .account_state import AccountState, AccountStateKeeper, judge_reply_deadline
 from .manager import AccountRuntime, BrowserIMRuntimeManager, runtime_manager
 
@@ -31,6 +32,9 @@ __all__ = [
     "AutoSlider",
     "BrowserAutoLogin",
     "AutoLoginResult",
+    "BrowserQRLogin",
+    "BrowserQRLoginManager",
+    "qr_login_manager_browser",
     "AccountState",
     "AccountStateKeeper",
     "judge_reply_deadline",

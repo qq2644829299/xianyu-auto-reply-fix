@@ -830,3 +830,5 @@ test_php_stats.py
 !utils/browser_im/auto_login.py
 !utils/browser_im/account_state.py
 !tools/verify_auto_login.py
+!utils/browser_im/browser_qr_login.py
+!tools/verify_browser_qr.py
