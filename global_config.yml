@@ -116,6 +116,8 @@ BROWSER_IM:
   startup_timeout_seconds: 90     # 等待页面建立 IM WS 的上限
   captcha_selfheal_first: true    # 出验证码先走浏览器自愈，滑块只作保底
   fallback_to_direct_ws: true     # 浏览器起不来时回退原直连逻辑
+  reuse_persistent_browser: true  # 复用 utils/persistent_browser 常驻浏览器，避免重复开 Chromium
+  executable_path: ''             # 浏览器路径；留空自动探测（容器内为 /usr/bin/chromium）
 
 # ======================================================================
 # 页内自动滑块（对应「鱼店长Pro」的 EnableAutoVerify / SliderVerify）
@@ -129,4 +131,5 @@ AUTO_SLIDER:
   headful_manual_wait_seconds: 90  # 有头模式下自动失败后留给人工的时长
   notify_on_repeat_fail: true      # 反复失败时通知
   rotate_page_before_retry: true   # 每次重试前刷新验证页拿新 puzzle
+
 

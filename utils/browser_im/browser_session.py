@@ -141,6 +141,47 @@ class BrowserSessionError(RuntimeError):
     pass
 
 
+# 容器/精简镜像里通常没有 playwright 自带的 chromium，需要回退到系统浏览器
+_SYSTEM_CHROMIUM_CANDIDATES = (
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/opt/google/chrome/chrome",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+)
+
+
+def pick_browser_executable(explicit: Optional[str] = None) -> Optional[str]:
+    """决定用哪个浏览器可执行文件。
+
+    返回 None 表示让 Playwright 用它自己下载的 chromium。
+    容器里常见情况：`PLAYWRIGHT_BROWSERS_PATH` 指向的目录是空的，
+    此时必须回退到系统 chromium，否则启动直接报 "Executable doesn't exist"。
+    """
+    if explicit and os.path.exists(explicit):
+        return explicit
+
+    env_path = (os.environ.get("XY_IM_BROWSER_PATH") or "").strip()
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    browsers_path = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+    if browsers_path and os.path.isdir(browsers_path):
+        try:
+            for name in os.listdir(browsers_path):
+                if name.startswith("chromium"):
+                    return None  # 自带浏览器可用
+        except OSError:
+            pass
+
+    for cand in _SYSTEM_CHROMIUM_CANDIDATES:
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
 class BrowserIMSession:
     """一个账号一个实例：常驻浏览器 + IM WS 事件桥。
 
@@ -161,6 +202,8 @@ class BrowserIMSession:
         lang: str = "zh-CN",
         timezone_id: str = "Asia/Shanghai",
         viewport: Optional[Dict[str, int]] = None,
+        attach_context: Optional[Any] = None,
+        executable_path: Optional[str] = None,
     ) -> None:
         self.cookie_id = cookie_id
         self.cookies_str = cookies_str or ""
@@ -169,6 +212,12 @@ class BrowserIMSession:
         self.lang = lang
         self.timezone_id = timezone_id
         self.viewport = viewport or {"width": 1366, "height": 860}
+
+        # attach_context: 挂到已有的常驻 context 上（复用 utils.persistent_browser），
+        # 这样不会为同一账号再开一个 Chromium —— 容器内存有限，开两个会 OOM。
+        self._attach_context = attach_context
+        self._owns_context = attach_context is None
+        self.executable_path = executable_path
 
         if user_data_root is None:
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -194,10 +243,10 @@ class BrowserIMSession:
     # ------------------------------------------------------------------ 生命周期
 
     async def start(self) -> None:
-        """启动持久化浏览器上下文并挂载 WS 劫持。幂等。"""
+        """启动或挂载浏览器会话并挂上 WS 劫持。幂等。"""
         if self._started:
             return
-        if async_playwright is None:
+        if async_playwright is None and self._attach_context is None:
             raise BrowserSessionError(
                 f"Playwright 不可用: {_PLAYWRIGHT_IMPORT_ERROR}"
             )
@@ -206,31 +255,51 @@ class BrowserIMSession:
             if self._started:
                 return
 
-            self._pw = await async_playwright().start()
+            if self._attach_context is not None:
+                # ---- 挂载模式：复用已有常驻 context（不新开 Chromium）----
+                self._pw = None
+                self._context = self._attach_context
+                self._owns_context = False
+                logger.info(f"【{self.cookie_id}】挂载到已有常驻浏览器上下文")
+            else:
+                # ---- 自建模式：本地开发/未提供常驻上下文时 ----
+                self._pw = await async_playwright().start()
 
-            launch_args: Dict[str, Any] = {
-                "user_data_dir": self.user_data_dir,
-                "headless": self.headless,
-                "locale": self.lang,
-                "timezone_id": self.timezone_id,
-                "viewport": self.viewport,
-                "args": [
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-features=IsolateOrigins,site-per-process",
-                    "--no-default-browser-check",
-                    "--no-first-run",
-                    "--disable-dev-shm-usage",
-                    "--disable-background-timer-throttling",
-                    "--disable-renderer-backgrounding",
-                    "--disable-backgrounding-occluded-windows",
-                ],
-                "ignore_default_args": ["--enable-automation"],
-            }
-            proxy_cfg = self._build_proxy_cfg()
-            if proxy_cfg:
-                launch_args["proxy"] = proxy_cfg
+                launch_args: Dict[str, Any] = {
+                    "user_data_dir": self.user_data_dir,
+                    "headless": self.headless,
+                    "locale": self.lang,
+                    "timezone_id": self.timezone_id,
+                    "viewport": self.viewport,
+                    "args": [
+                        # 容器内通常以 root 运行 Chromium，必须关沙箱，否则启动即失败
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-features=IsolateOrigins,site-per-process",
+                        "--no-default-browser-check",
+                        "--no-first-run",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--disable-accelerated-2d-canvas",
+                        # 内存受限环境（如 2G 容器）下的必要收敛
+                        "--disable-background-timer-throttling",
+                        "--disable-renderer-backgrounding",
+                        "--disable-backgrounding-occluded-windows",
+                        "--js-flags=--max-old-space-size=320",
+                    ],
+                    "ignore_default_args": ["--enable-automation"],
+                }
+                exe = pick_browser_executable(self.executable_path)
+                if exe:
+                    launch_args["executable_path"] = exe
+                    logger.info(f"【{self.cookie_id}】使用浏览器可执行文件: {exe}")
 
-            self._context = await self._pw.chromium.launch_persistent_context(**launch_args)
+                proxy_cfg = self._build_proxy_cfg()
+                if proxy_cfg:
+                    launch_args["proxy"] = proxy_cfg
+
+                self._context = await self._pw.chromium.launch_persistent_context(**launch_args)
 
             # 整个 context 生效：所有 frame 都能回调进来
             await self._context.expose_binding("__xyWsEvent", self._on_ws_event)
@@ -240,10 +309,38 @@ class BrowserIMSession:
                 await self._apply_cookies_str(self.cookies_str)
 
             self._page = await self._ensure_page()
-            await self._navigate_home()
+
+            if self._owns_context:
+                await self._navigate_home()
+            else:
+                # 挂载模式：页面多半已经加载过，init script 只对之后生效，
+                # 必须重载一次，WS 劫持才会挂到页面的 WebSocket 构造上。
+                await self._reload_for_attach()
 
             self._started = True
-            logger.info(f"【{self.cookie_id}】浏览器态会话已启动（headless={self.headless}）")
+            logger.info(
+                f"【{self.cookie_id}】浏览器态会话已就绪"
+                f"（headless={self.headless}, 自有上下文={self._owns_context}）"
+            )
+
+    async def _reload_for_attach(self) -> None:
+        """挂载模式下的首帧重载：让 init script 真正生效。"""
+        try:
+            page = await self._ensure_page()
+            cur = page.url or ""
+            if cur in ("", "about:blank"):
+                await self._navigate_home()
+                return
+            logger.info(f"【{self.cookie_id}】重载页面以注入 WS 劫持（当前: {cur[:80]}）")
+            await page.reload(wait_until="domcontentloaded", timeout=45000)
+            await self._wait_im_ws(timeout=25)
+            self._page_load_ts = time.time()
+        except Exception as exc:
+            logger.warning(f"【{self.cookie_id}】挂载后重载失败（不阻断）: {exc}")
+            try:
+                await self._navigate_home()
+            except Exception:
+                pass
 
     def _build_proxy_cfg(self) -> Optional[Dict[str, Any]]:
         if not self.proxy:
@@ -329,11 +426,14 @@ class BrowserIMSession:
     async def close(self) -> None:
         self._closed = True
         try:
-            if self._context is not None:
+            # 挂载模式下 context 属于 utils.persistent_browser，由它负责释放，
+            # 这里关掉会把账号的常驻浏览器一起干掉，导致其它链路全部失效。
+            if self._context is not None and self._owns_context:
                 await self._context.close()
         except Exception as exc:
             logger.debug(f"【{self.cookie_id}】关闭浏览器上下文异常（忽略）: {exc}")
         finally:
+            self._attach_context = None
             self._context = None
             self._page = None
             try:

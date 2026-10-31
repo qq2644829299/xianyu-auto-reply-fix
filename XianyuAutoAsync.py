@@ -15922,6 +15922,8 @@ class XianyuLive:
                         headless=self.browser_im_headless,
                         proxy=proxy,
                         slider_options=self._build_slider_options(),
+                        prefer_persistent=bool(self.browser_im_config.get('reuse_persistent_browser', True)),
+                        executable_path=self.browser_im_config.get('executable_path') or None,
                     ),
                     timeout=timeout,
                 )

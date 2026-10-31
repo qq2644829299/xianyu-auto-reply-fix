@@ -121,6 +121,12 @@ class BrowserIMTransport:
     # -------------------------------------------------------------- 事件泵
 
     async def _pump_loop(self) -> None:
+        """事件泵。
+
+        这里的健壮性很关键：一旦泵退出，之后所有 IM 消息都不会再被转发，
+        表现为"连接在、消息不来"的假在线。因此单条事件处理失败只记日志，
+        绝不终止循环。
+        """
         while not self._closed_local:
             try:
                 event = await self.session.next_event(timeout=1.0)
@@ -132,33 +138,43 @@ class BrowserIMTransport:
                 continue
 
             if event is None:
-                # 顺带刷新一次连接状态，供 watchdog/业务层读取
                 continue
 
-            etype = event.get("type")
-            if etype == "open":
-                self._last_state = 1
-                self._registered = True
-                self._notify_open()
-                logger.info(f"【{self.cookie_id}】[浏览器Ws] IM WebSocket 打开 ({event.get('url')})")
-            elif etype == "message":
-                if event.get("binary"):
-                    continue
-                self._last_message_ts = time.time()
-                self._message_count += 1
-                body = event.get("data") or ""
-                for sub in list(self._subs):
+            try:
+                self._handle_event(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error(f"【{self.cookie_id}】[浏览器Ws] 事件处理异常（已隔离）: {exc}")
+
+    def _handle_event(self, event: Dict[str, Any]) -> None:
+        etype = event.get("type")
+        if etype == "open":
+            self._last_state = 1
+            self._registered = True
+            self._notify_open()
+            logger.info(f"【{self.cookie_id}】[浏览器Ws] IM WebSocket 打开 ({event.get('url')})")
+        elif etype == "message":
+            if event.get("binary"):
+                return
+            self._last_message_ts = time.time()
+            self._message_count += 1
+            body = event.get("data") or ""
+            for sub in list(self._subs):
+                try:
                     sub.offer({"data": body, "ts": event.get("ts")})
-            elif etype == "close":
-                self._last_state = 3
-                self._registered = False
-                logger.warning(
-                    f"【{self.cookie_id}】[浏览器Ws] IM WebSocket 关闭 "
-                    f"code={event.get('code')} reason={event.get('reason')}"
-                )
-                _ = self.session.on_im_ws_closed  # 由外部 watcher 处理
-            elif etype == "error":
-                logger.warning(f"【{self.cookie_id}】[浏览器Ws] IM WebSocket 错误")
+                except Exception as exc:
+                    logger.debug(f"【{self.cookie_id}】投递订阅失败（忽略）: {exc}")
+        elif etype == "close":
+            self._last_state = 3
+            self._registered = False
+            logger.warning(
+                f"【{self.cookie_id}】[浏览器Ws] IM WebSocket 关闭 "
+                f"code={event.get('code')} reason={event.get('reason')}"
+            )
+            # 断线后的自愈由 WsDisconnectWatcher 计时与刷新，这里只更新状态
+        elif etype == "error":
+            logger.warning(f"【{self.cookie_id}】[浏览器Ws] IM WebSocket 错误")
 
     def _notify_open(self) -> None:
         for fut in self._open_waiters:

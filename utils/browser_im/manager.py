@@ -33,14 +33,28 @@ class AccountRuntime:
         headless: bool = True,
         proxy: Optional[Dict[str, Any]] = None,
         slider_options: Optional[Dict[str, Any]] = None,
+        prefer_persistent: bool = True,
+        executable_path: Optional[str] = None,
     ) -> None:
         if self.ready:
             return
+
+        # ---------------------------------------------------------------
+        # 优先复用项目已有的账号级常驻浏览器（utils/persistent_browser.py）。
+        # 它在服务器上已被 cookie 刷新链路使用；再为同一账号开第二个 Chromium
+        # 既浪费内存（容器常只有 2G），又会让两个浏览器抢同一份登录态。
+        # ---------------------------------------------------------------
+        attach = None
+        if prefer_persistent:
+            attach = await self._try_attach_persistent(cookies_str, headless)
+
         self.session = BrowserIMSession(
             self.cookie_id,
             cookies_str=cookies_str,
             headless=headless,
             proxy=proxy,
+            attach_context=attach,
+            executable_path=executable_path,
         )
         await self.session.start()
         self.transport = BrowserIMTransport(self.session)
@@ -49,7 +63,29 @@ class AccountRuntime:
         self.watchdog.start()
         self.slider = AutoSlider(self.session, **(slider_options or {}))
         self.ready = True
-        logger.info(f"【{self.cookie_id}】浏览器 IM 运行时就绪（含页内自动滑块）")
+        logger.info(
+            f"【{self.cookie_id}】浏览器 IM 运行时就绪"
+            f"（含页内自动滑块，复用常驻浏览器={attach is not None}）"
+        )
+
+    async def _try_attach_persistent(self, cookies_str: str, headless: bool):
+        """尝试拿到账号级常驻 context；拿不到返回 None。"""
+        try:
+            from utils.persistent_browser import persistent_browsers
+        except Exception:
+            return None
+        try:
+            ctx = await persistent_browsers.get_context(
+                self.cookie_id,
+                headless=headless,
+                initial_cookies=cookies_str or None,
+            )
+            if ctx is not None:
+                logger.info(f"【{self.cookie_id}】复用常驻浏览器上下文（不新开 Chromium）")
+            return ctx
+        except Exception as exc:
+            logger.warning(f"【{self.cookie_id}】获取常驻浏览器失败，将自建: {exc}")
+            return None
 
     async def stop(self) -> None:
         if self.watchdog is not None:
@@ -96,6 +132,8 @@ class BrowserIMRuntimeManager:
         headless: bool = True,
         proxy: Optional[Dict[str, Any]] = None,
         slider_options: Optional[Dict[str, Any]] = None,
+        prefer_persistent: bool = True,
+        executable_path: Optional[str] = None,
     ) -> AccountRuntime:
         key = str(cookie_id)
         async with self._lock:
@@ -108,6 +146,8 @@ class BrowserIMRuntimeManager:
                 headless=headless,
                 proxy=proxy,
                 slider_options=slider_options,
+                prefer_persistent=prefer_persistent,
+                executable_path=executable_path,
             )
             self._items[key] = rt
             return rt

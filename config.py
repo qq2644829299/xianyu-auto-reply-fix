@@ -1,4 +1,4 @@
-import os
+﻿import os
 import yaml
 from typing import Dict, Any
 
@@ -159,6 +159,8 @@ BROWSER_IM = config.get('BROWSER_IM', {
     'startup_timeout_seconds': 90,      # 等待页面建立 IM WS 的上限
     'captcha_selfheal_first': True,     # 出验证码时先浏览器自愈，滑块仅作保底
     'fallback_to_direct_ws': True,      # 浏览器起不来时回退原直连 WSS 逻辑
+    'reuse_persistent_browser': True,   # 复用 utils/persistent_browser 的常驻浏览器，避免重复开 Chromium
+    'executable_path': '',              # 浏览器路径；留空自动探测（容器内通常为 /usr/bin/chromium）
 })
 
 # ======================================================================
@@ -183,3 +185,4 @@ else:
     # 兼容旧格式，仅有 value 字段
     val = _cookies_raw.get('value') if isinstance(_cookies_raw, dict) else None
     COOKIES_LIST = [{'id': 'default', 'value': val}] if val else []
+
