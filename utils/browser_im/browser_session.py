@@ -141,15 +141,25 @@ class BrowserSessionError(RuntimeError):
     pass
 
 
-# 容器/精简镜像里通常没有 playwright 自带的 chromium，需要回退到系统浏览器
+# 容器/精简镜像里通常没有 playwright 自带的 chromium，需要回退到系统浏览器。
+# 桌面版尤其重要：Windows 自带 Edge、多数机器装了 Chrome，因此**无需随包分发
+# Chromium**（PyInstaller 也打不进去），直接用系统浏览器即可。
 _SYSTEM_CHROMIUM_CANDIDATES = (
+    # Linux / 服务器
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
     "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
     "/opt/google/chrome/chrome",
+    # Windows（桌面版主战场：Edge 为系统自带，命中率最高）
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    # macOS
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
 )
 
 
