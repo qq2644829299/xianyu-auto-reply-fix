@@ -156,41 +156,56 @@ class BrowserAutoLogin:
         if not self.username or not self.password:
             return AutoLoginResult(ok=False, reason="missing_credentials", attempts=0)
 
-        page = await self.session._ensure_page()
-        await self._install_response_hook(page)
-
-        logger.info(f"【{self.cookie_id}】[自动登录] 开始四步登录（账号={self._mask(self.username)}）")
-
+        # ---------------------------------------------------------------
+        # 关键：登录用**独立标签页**，不碰常驻的 IM 页面。
+        #
+        # 逆向鱼店长的结构：`AgisoIdleClient.Login : Window` 是一个独立窗口，
+        # 登录完成后才进入主界面（`LoginSuccessAsync` -> MainWindow）。
+        # 早期实现是在 IM 页面上直接 goto 登录页，代价是：
+        #   goto -> IM WebSocket 断开 -> 登录 -> 再切回 IM -> 重建 WS 与 token
+        # 这一套来回跑下来既慢又容易把会话搞脏，用户看到的就是"一直转圈"。
+        # ---------------------------------------------------------------
+        login_page = None
+        main_page = None
         try:
+            main_page = await self.session._ensure_page()
+            login_page = await self._open_isolated_page()
+            await self._install_response_hook(login_page)
+
+            logger.info(
+                f"【{self.cookie_id}】[自动登录] 开始四步登录"
+                f"（账号={self._mask(self.username)}，独立标签页）"
+            )
+
             # 0) 打开登录页
-            if not await self._open_login_page(page):
+            if not await self._open_login_page(login_page):
                 return AutoLoginResult(ok=False, reason="login_page_unreachable", attempts=1)
 
             # 1) 切换账号登录
-            await self._step_switch_to_password(page)
+            await self._step_switch_to_password(login_page)
 
             # 2) 勾选隐私条款
-            await self._step_agree_terms(page)
+            await self._step_agree_terms(login_page)
 
             # 3) 输入账号密码
-            if not await self._step_fill_credentials(page):
+            if not await self._step_fill_credentials(login_page):
                 return AutoLoginResult(ok=False, reason="credentials_input_failed", attempts=1)
 
             # 4) 提交
-            if not await self._step_submit(page):
+            if not await self._step_submit(login_page):
                 return AutoLoginResult(ok=False, reason="submit_failed", attempts=1)
 
             # 5) 等结果
-            outcome = await self._await_login_outcome(page)
+            outcome = await self._await_login_outcome(login_page)
 
             # 6) 需要滑块 -> 同会话页内过验证后重试一次
             if outcome.get("reason") in ("verify_required", "risk_control"):
-                if await self._try_slider(page):
-                    outcome = await self._await_login_outcome(page)
+                if await self._try_slider(login_page):
+                    outcome = await self._await_login_outcome(login_page)
 
             if outcome.get("ok"):
                 cookies = await self.session.cookies_to_string()
-                user_info = await self._collect_user_info(page)
+                user_info = await self._collect_user_info(login_page)
                 logger.info(
                     f"【{self.cookie_id}】[自动登录] 成功"
                     + (f"，昵称={user_info.get('nick_name')}" if user_info.get("nick_name") else "")
@@ -218,6 +233,32 @@ class BrowserAutoLogin:
         except Exception as exc:
             logger.error(f"【{self.cookie_id}】[自动登录] 异常: {exc}")
             return AutoLoginResult(ok=False, reason=f"exception: {exc}", attempts=1)
+        finally:
+            # 只关闭真正新开的登录标签页；主页面（自检/降级场景）绝不能关
+            if login_page is not None and login_page is not main_page:
+                try:
+                    await login_page.close()
+                    logger.debug(f"【{self.cookie_id}】[自动登录] 已关闭登录标签页")
+                except Exception:
+                    pass
+
+    async def _open_isolated_page(self):
+        """在同一个 context 里新开一个标签页做登录（共享 cookie，不干扰 IM 页）。
+
+        例外：`login_urls` 为空表示"调用方已备好页面"（自检场景），此时直接用当前页。
+        """
+        if not self.login_urls:
+            return await self.session._ensure_page()
+        ctx = self.session._context
+        if ctx is None:
+            return await self.session._ensure_page()
+        try:
+            page = await ctx.new_page()
+            # init script 已注册在 context 上，新页面自动继承（含 WS 劫持与 stealth）
+            return page
+        except Exception as exc:
+            logger.warning(f"【{self.cookie_id}】[自动登录] 新建标签页失败，改用主页面: {exc}")
+            return await self.session._ensure_page()
 
     # ------------------------------------------------------------------ 响应拦截
 
@@ -433,29 +474,38 @@ class BrowserAutoLogin:
     # ------------------------------------------------------------------ 结果判定
 
     async def _await_login_outcome(self, page) -> Dict[str, Any]:
-        """等待并判定登录结果（对齐 LoginDoResponse 语义）。"""
+        """等待并判定登录结果（对齐 LoginDoResponse 语义）。
+
+        以前这里 60 秒里每 1 秒静默轮询一次，用户看到的就是"一直转圈"。
+        现在：轮询更密、每 5 秒打一条进度（当前 URL + 是否有验证），
+        并且一旦发现明确的失败信号立刻返回，不白等满超时。
+        """
         deadline = time.time() + self.login_timeout_seconds
+        start = time.time()
+        last_report = 0.0
         saw_password_error = False
         saw_locked = False
         saw_not_exist = False
 
         while time.time() < deadline:
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
 
-            # 1) 接口响应直判
+            # 1) 接口响应直判（最快路径）
             verdict = self._judge_payloads()
             if verdict:
+                if verdict.get("ok"):
+                    logger.info(f"【{self.cookie_id}】[自动登录] 接口返回成功: {verdict.get('reason')}")
                 return verdict
 
             # 2) cookie 直判
             try:
                 cookies = await self.session.dump_cookies()
                 names = {c.get("name") for c in cookies}
-                if "unb" in names and ("cookie2" in names or "sgcookie" in names):
+                if "unb" in names and ("cookie2" in names or "sgcookie" in names or "_m_h5_tk" in names):
                     logger.info(f"【{self.cookie_id}】[自动登录] 检测到登录 cookie（unb 已就位）")
                     return {"ok": True, "reason": "cookie_ok"}
                 if "x5sec" in names:
-                    return {"ok": False, "reason": "verify_required"}
+                    return {"ok": False, "reason": "verify_required", "detail": "x5sec cookie"}
             except Exception:
                 pass
 
@@ -466,7 +516,7 @@ class BrowserAutoLogin:
                 ) or ""
                 url = page.url or ""
                 if any(h in url for h in RISK_URL_HINTS) or any(h in body for h in RISK_TEXT_HINTS):
-                    return {"ok": False, "reason": "verify_required"}
+                    return {"ok": False, "reason": "verify_required", "detail": url[:120]}
                 if any(h in body for h in LOCKED_HINTS):
                     saw_locked = True
                     return {"ok": False, "reason": "account_locked", "detail": body[:120]}
@@ -478,6 +528,16 @@ class BrowserAutoLogin:
                     return {"ok": False, "reason": "account_not_exist", "detail": body[:120]}
                 if "登录成功" in body:
                     return {"ok": True, "reason": "page_success"}
+
+                # 进度可见：每 5 秒报一次当前位置
+                elapsed = time.time() - start
+                if elapsed - last_report >= 5.0:
+                    last_report = elapsed
+                    short_url = url[:70] if url else "(blank)"
+                    logger.info(
+                        f"【{self.cookie_id}】[自动登录] 等待结果 {int(elapsed)}s/{int(self.login_timeout_seconds)}s"
+                        f"，当前页面: {short_url}"
+                    )
             except Exception:
                 pass
 

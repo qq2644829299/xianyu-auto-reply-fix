@@ -153,6 +153,18 @@ _SYSTEM_CHROMIUM_CANDIDATES = (
 )
 
 
+def _available_memory_mb() -> Optional[int]:
+    """读 /proc/meminfo 的 MemAvailable（MB）。非 Linux 或读不到返回 None。"""
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except Exception:
+        return None
+    return None
+
+
 def pick_browser_executable(explicit: Optional[str] = None) -> Optional[str]:
     """决定用哪个浏览器可执行文件。
 
@@ -282,11 +294,15 @@ class BrowserIMSession:
                         "--disable-dev-shm-usage",
                         "--disable-gpu",
                         "--disable-accelerated-2d-canvas",
-                        # 内存受限环境（如 2G 容器）下的必要收敛
+                        "--disable-software-rasterizer",
+                        # 内存受限环境（如 2G 容器）下的必要收敛：
+                        # 限制渲染进程数量，避免一个页面炸出多个进程把宿主撑爆
+                        "--renderer-process-limit=1",
+                        "--process-per-site",
                         "--disable-background-timer-throttling",
                         "--disable-renderer-backgrounding",
                         "--disable-backgrounding-occluded-windows",
-                        "--js-flags=--max-old-space-size=320",
+                        "--js-flags=--max-old-space-size=256 --max-semi-space-size=4",
                     ],
                     "ignore_default_args": ["--enable-automation"],
                 }
@@ -324,7 +340,18 @@ class BrowserIMSession:
             )
 
     async def _reload_for_attach(self) -> None:
-        """挂载模式下的首帧重载：让 init script 真正生效。"""
+        """挂载模式下的首帧重载：让 init script 真正生效。
+
+        重载是内存峰值最高的动作，容器内存吃紧时宁可先不重载——劫持脚本会在
+        下一次自然导航时生效，而把宿主 OOM 掉是更糟的结果。
+        """
+        avail = _available_memory_mb()
+        if avail is not None and avail < 220:
+            logger.warning(
+                f"【{self.cookie_id}】可用内存仅 {avail}MB，跳过挂载后重载（避免 OOM）"
+            )
+            self._page_load_ts = time.time()
+            return
         try:
             page = await self._ensure_page()
             cur = page.url or ""
