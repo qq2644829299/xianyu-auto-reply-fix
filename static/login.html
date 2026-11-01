@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -140,11 +140,8 @@
           <input type="radio" class="btn-check" name="loginType" id="usernameLogin" value="username" checked>
           <label class="btn btn-outline-primary" for="usernameLogin">用户名/密码</label>
 
-          <input type="radio" class="btn-check" name="loginType" id="emailPasswordLogin" value="email-password">
-          <label class="btn btn-outline-primary" for="emailPasswordLogin">邮箱/密码</label>
-
-          <input type="radio" class="btn-check" name="loginType" id="emailCodeLogin" value="email-code">
-          <label class="btn btn-outline-primary" for="emailCodeLogin">邮箱/验证码</label>
+          <input type="radio" class="btn-check" name="loginType" id="emailLogin" value="email-password">
+          <label class="btn btn-outline-primary" for="emailLogin">邮箱登录</label>
         </div>
       </div>
 
@@ -184,6 +181,18 @@
             </div>
           </div>
         </div>
+
+        <!-- 邮箱登录：密码 / 验证码 两种方式，用按钮切换，共用一个 tab -->
+        <div id="emailLoginWrap" class="login-form-section" style="display: none;">
+          <div class="d-flex justify-content-center mb-3">
+            <div class="btn-group btn-group-sm" role="group" aria-label="邮箱登录方式">
+              <input type="radio" class="btn-check" name="emailMode" id="emailModePassword" value="password" checked>
+              <label class="btn btn-outline-secondary" for="emailModePassword">密码登录</label>
+
+              <input type="radio" class="btn-check" name="emailMode" id="emailModeCode" value="code">
+              <label class="btn btn-outline-secondary" for="emailModeCode">验证码登录</label>
+            </div>
+          </div>
 
         <!-- 邮箱/密码登录 -->
         <div id="emailPasswordLoginForm" class="login-form-section" style="display: none;">
@@ -262,6 +271,7 @@
             <span id="codeStatus">请先验证图形验证码</span>
           </div>
         </div>
+        </div><!-- /emailLoginWrap -->
 
         <div id="errorAlert" class="alert alert-danger d-none" role="alert">
           <i class="bi bi-exclamation-triangle-fill me-2"></i>
@@ -374,7 +384,7 @@
     
     // 显示安全验证码
     function showSecurityCaptcha() {
-      const loginType = document.querySelector('input[name="loginType"]:checked').value;
+      const loginType = currentLoginType();
       
       if (loginType === 'username') {
         document.getElementById('securityCaptchaSection').style.display = 'block';
@@ -462,7 +472,7 @@
       hideError();
       setLoading(true);
 
-      const loginType = document.querySelector('input[name="loginType"]:checked').value;
+      const loginType = currentLoginType();
       let loginData = {};
 
       try {
@@ -626,9 +636,22 @@
       return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
     }
 
+    // 实际生效的登录方式。
+    // 顶层 tab 只有「用户名/密码」「邮箱登录」两种；邮箱登录内部再用
+    // emailMode 单选（密码 / 验证码）细分，对外仍沿用原来的
+    // 'email-password' / 'email-code' 取值，接口调用完全不变。
+    function currentLoginType() {
+      const top = document.querySelector('input[name="loginType"]:checked');
+      const type = top ? top.value : 'username';
+      if (type !== 'email-password') return type;
+      const modeEl = document.querySelector('input[name="emailMode"]:checked');
+      const mode = modeEl ? modeEl.value : 'password';
+      return mode === 'code' ? 'email-code' : 'email-password';
+    }
+
     // 登录方式切换
     function switchLoginType() {
-      const loginType = document.querySelector('input[name="loginType"]:checked').value;
+      const loginType = currentLoginType();
 
       // 隐藏所有表单
       document.querySelectorAll('.login-form-section').forEach(section => {
@@ -647,6 +670,7 @@
           securityCaptchaSection.style.display = 'none';
         }
       } else if (loginType === 'email-password') {
+        document.getElementById('emailLoginWrap').style.display = 'block';
         document.getElementById('emailPasswordLoginForm').style.display = 'block';
         // 根据验证码设置显示/隐藏验证码区域
         const emailSecurityCaptchaSection = document.getElementById('emailSecurityCaptchaSection');
@@ -657,6 +681,7 @@
           emailSecurityCaptchaSection.style.display = 'none';
         }
       } else if (loginType === 'email-code') {
+        document.getElementById('emailLoginWrap').style.display = 'block';
         document.getElementById('emailCodeLoginForm').style.display = 'block';
         // 每次切换到邮箱验证码登录时都加载验证码
         loadCaptcha();
@@ -880,6 +905,10 @@
       document.querySelectorAll('input[name="loginType"]').forEach(radio => {
         radio.addEventListener('change', switchLoginType);
       });
+      // 邮箱登录内部的“密码 / 验证码”切换（共用同一个 tab）
+      document.querySelectorAll('input[name="emailMode"]').forEach(radio => {
+        radio.addEventListener('change', switchLoginType);
+      });
 
       // 图形验证码输入框事件（邮箱验证码登录用）
       const captchaCodeInput = document.getElementById('captchaCode');
@@ -904,3 +933,4 @@
   </script>
 </body>
 </html>
+
