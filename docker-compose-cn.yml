@@ -6,15 +6,13 @@ services:
     image: xianyu-auto-reply-fix:latest
     container_name: xianyu-auto-reply-fix
     restart: unless-stopped
-    # 负责回收浏览器等子进程，避免长期运行后遗留进程耗尽系统资源。
-    init: true
     # 使用root用户避免权限问题
     user: "0:0"
     # 使用 bash 执行脚本，避免 Windows 行尾格式问题
     # 即使挂载了 Windows 文件，bash 也能正确处理
     entrypoint: ["/bin/bash", "-c", "dos2unix /app/entrypoint.sh 2>/dev/null || true; bash /app/entrypoint.sh"]
     ports:
-      - "127.0.0.1:8090:8090"
+      - "8000:8090"
       # - "5900:5900"    # VNC 端口（可选，用于远程查看浏览器）
       # - "6080:6080"    # noVNC Web 端口（浏览器手动接管）
     volumes:
@@ -29,12 +27,11 @@ services:
       # 开发模式：挂载源代码（修改代码后只需重启容器）
       - .:/app:rw
     environment:
-      # 人工安全验证必须在同一个可见浏览器会话中进行。VNC 仅在容器内部
-      # 监听，页面通过受随机会话保护的应用通道访问，不暴露端口到公网。
-      - USE_XVFB=true
-      - ENABLE_HEADFUL=true
-      - ENABLE_VNC=true
-      - DISPLAY=:99
+      # 启用虚拟显示（有头模式）
+      # - USE_XVFB=true           # 启用 Xvfb 虚拟显示
+      # - ENABLE_HEADFUL=true     # 启用有头模式
+      # - ENABLE_VNC=true         # 启用 VNC 服务器（可选）
+      # - DISPLAY=:99             # 虚拟显示编号
       
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
       - PYTHONDONTWRITEBYTECODE=${PYTHONDONTWRITEBYTECODE:-1}
@@ -44,8 +41,7 @@ services:
       - DEBUG=${DEBUG:-false}
       - RELOAD=${RELOAD:-false}
       # SQL日志配置（默认启用，可通过环境变量覆盖）
-      # 常规运行不记录每条数据库语句，避免日志持续膨胀；排障时可在 .env 临时开启。
-      - SQL_LOG_ENABLED=${SQL_LOG_ENABLED:-false}
+      - SQL_LOG_ENABLED=${SQL_LOG_ENABLED:-true}
       - SQL_LOG_LEVEL=${SQL_LOG_LEVEL:-INFO}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
@@ -68,28 +64,12 @@ services:
       - DEFAULT_AI_BASE_URL=${DEFAULT_AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       - AI_REQUEST_TIMEOUT=${AI_REQUEST_TIMEOUT:-30}
       - AI_MAX_TOKENS=${AI_MAX_TOKENS:-100}
-      - PLATFORM_AI_API_KEY=${PLATFORM_AI_API_KEY:-}
-      # 腾讯云 SES：凭证由服务器 .env 注入，绝不写入前端或数据库。
-      - TENCENTCLOUD_SECRET_ID=${TENCENTCLOUD_SECRET_ID:-}
-      - TENCENTCLOUD_SECRET_KEY=${TENCENTCLOUD_SECRET_KEY:-}
-      - TENCENTCLOUD_SES_REGION=${TENCENTCLOUD_SES_REGION:-ap-hongkong}
-      - SES_FROM_EMAIL=${SES_FROM_EMAIL:-}
-      - SES_TEMPLATE_REGISTER_ID=${SES_TEMPLATE_REGISTER_ID:-}
-      - SES_TEMPLATE_LOGIN_ID=${SES_TEMPLATE_LOGIN_ID:-}
-      - SES_TEMPLATE_RESET_ID=${SES_TEMPLATE_RESET_ID:-}
       - WEBSOCKET_URL=${WEBSOCKET_URL:-wss://wss-goofish.dingtalk.com/}
       - HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-15}
       - HEARTBEAT_TIMEOUT=${HEARTBEAT_TIMEOUT:-5}
       - TOKEN_REFRESH_INTERVAL=${TOKEN_REFRESH_INTERVAL:-3600}
       - TOKEN_RETRY_INTERVAL=${TOKEN_RETRY_INTERVAL:-300}
       - MESSAGE_EXPIRE_TIME=${MESSAGE_EXPIRE_TIME:-300000}
-
-    # 限制容器标准输出日志，防止长期运行占满磁盘。
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
 
     networks:
       - xianyu-network

@@ -1,4 +1,4 @@
-__pycache__
+﻿__pycache__
 *node_modules/*
 *.so
 .Python
@@ -837,3 +837,12 @@ test_php_stats.py
 !desktop/
 !desktop_ui/
 !desktop_ui/*.css
+
+# 云端 AI 共享令牌（不进版本库）
+cloud_ai_token.txt
+
+# 桌面端构建产物
+dist-desktop/
+build-desktop/
+release/
+

@@ -8,7 +8,6 @@ import asyncio
 import time
 import uuid
 import json
-import os
 import re
 from random import random
 from typing import Optional, Dict, Any
@@ -273,20 +272,16 @@ class QRLoginManager:
 
             logger.info(f"开始打开扫码登录验证页面: {session_id}")
             playwright = await async_playwright().start()
-            launch_options = {
-                'headless': True,
-                'args': [
+            browser = await playwright.chromium.launch(
+                headless=True,
+                args=[
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
                     '--lang=zh-CN',
-                ],
-            }
-            chromium_path = os.getenv('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', '').strip()
-            if chromium_path and os.path.exists(chromium_path):
-                launch_options['executable_path'] = chromium_path
-            browser = await playwright.chromium.launch(**launch_options)
+                ]
+            )
             context = await browser.new_context(
                 viewport={'width': 540, 'height': 960},
                 locale='zh-CN',

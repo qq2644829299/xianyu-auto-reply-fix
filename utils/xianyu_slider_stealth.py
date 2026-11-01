@@ -144,7 +144,6 @@ def probe_cookie_verification_from_cookie(
     cookie_text: str,
     proxy: Optional[Dict[str, Any]] = None,
     timeout: float = 30,
-    device_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     import requests
 
@@ -192,9 +191,7 @@ def probe_cookie_verification_from_cookie(
         proxy_url = f"{proxy_type}://{auth}{proxy_host}:{proxy_port}"
         proxies = {"http": proxy_url, "https": proxy_url}
 
-    # 凭证获取、官方验证及恢复请求必须持续使用同一个设备标识。每次请求
-    # 临时生成新标识会让闲鱼把验证页判为另一台设备，导致人工滑动后仍报错。
-    device_id = str(device_id or '').strip() or generate_cookie_verification_device_id(user_id)
+    device_id = generate_cookie_verification_device_id(user_id)
     ts = str(int(time.time()) * 1000)
     data_val = (
         '{"appKey":"444e9908a51d1cb236a27862abc769c9",'
@@ -1645,14 +1642,9 @@ class XianyuSliderStealth:
 
     def _detect_local_browser_info(self) -> Dict[str, Any]:
         if os.name != 'nt':
-            browser_candidates = [
-                {"family": "chrome", "channel": "", "path": "/usr/bin/chromium"},
-                {"family": "chrome", "channel": "", "path": "/usr/bin/chromium-browser"},
-                {"family": "chrome", "channel": "", "path": "/usr/bin/google-chrome"},
-                {"family": "chrome", "channel": "", "path": "/usr/bin/google-chrome-stable"},
-            ]
-        else:
-            browser_candidates = [
+            return {}
+
+        browser_candidates = [
             {
                 "family": "edge",
                 "channel": "msedge",
@@ -1673,7 +1665,7 @@ class XianyuSliderStealth:
                 "channel": "chrome",
                 "path": r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
             },
-            ]
+        ]
 
         for candidate in browser_candidates:
             browser_path = candidate["path"]

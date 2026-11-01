@@ -103,51 +103,10 @@
             align-items: center;
         }
 
-        .live-control-tip {
-            display: none;
-            margin: 12px 0 0;
-            padding: 11px 13px;
-            border-radius: 8px;
-            background: #eef6ff;
-            border: 1px solid #91caff;
-            color: #0958d9;
-            font-size: 14px;
-            line-height: 1.55;
-        }
-
-        .live-control-tip.active { display: block; }
-
         #captchaCanvas {
             max-width: 100%;
             display: block;
             cursor: crosshair;
-        }
-
-        .drag-feedback {
-            position: absolute;
-            left: 12px;
-            right: 12px;
-            bottom: 12px;
-            display: none;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 10px;
-            border-radius: 6px;
-            background: rgba(17, 24, 39, .82);
-            color: #fff;
-            font-size: 13px;
-            pointer-events: none;
-        }
-
-        .drag-feedback.active { display: flex; }
-
-        .drag-feedback-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #60a5fa;
-            box-shadow: 0 0 0 4px rgba(96, 165, 250, .22);
-            animation: pulse 1s infinite;
         }
 
         .loading {
@@ -333,13 +292,6 @@
                 <p>加载中...</p>
             </div>
             <canvas id="captchaCanvas"></canvas>
-            <div id="dragFeedback" class="drag-feedback" aria-live="polite">
-                <span class="drag-feedback-dot"></span>
-                <span id="dragFeedbackText">正在转发拖动到验证页面…</span>
-            </div>
-        </div>
-        <div class="live-control-tip" id="liveControlTip">
-            当前未识别到可操作的滑块区域。这通常表示官方页已失效或降级为错误页；请关闭本窗口并重新发起验证。
         </div>
 
         <div class="log" id="log">
@@ -354,8 +306,8 @@
         let ctx = null;
         let isMouseDown = false;
         let lastMoveTime = 0;
-        let moveThrottle = 16; // 一帧一条，保证连续手势且不会堆积事件。
-        let captureOrigin = {x: 0, y: 0}; // 当前截图在 Playwright 页面中的真实原点
+        let moveThrottle = 5; // 节流：每10ms最多发送一次（极致流畅）
+        let captchaOffset = {x: 0, y: 0}; // 滑块区域在页面中的偏移量
 
         // 初始化
         document.addEventListener('DOMContentLoaded', () => {
@@ -389,12 +341,10 @@
             }
 
             // 鼠标事件
-            canvas.style.touchAction = 'none';
-            canvas.addEventListener('pointerdown', handleMouseDown);
-            canvas.addEventListener('pointermove', handleMouseMove);
-            canvas.addEventListener('pointerup', handleMouseUp);
-            canvas.addEventListener('pointercancel', handleMouseUp);
-
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('mouseleave', handleMouseUp);
         });
 
         function log(message, type = 'info') {
@@ -433,9 +383,7 @@
 
             try {
                 // 建立 WebSocket 连接
-                // HTTPS 页面只能建立加密 WebSocket；本地 HTTP 仍使用 ws，线上 HTTPS 使用 wss。
-                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${wsProtocol}//${window.location.host}/api/captcha/ws/${sessionId}`;
+                const wsUrl = `ws://${window.location.host}/api/captcha/ws/${sessionId}`;
                 log(`WebSocket URL: ${wsUrl}`, 'info');
                 
                 ws = new WebSocket(wsUrl);
@@ -475,19 +423,24 @@
             if (type === 'session_info') {
                 log('收到会话信息', 'success');
                 
-                updateCaptureOrigin(data.capture, data.captcha_info);
+                // 保存验证码容器偏移量
+                if (data.captcha_info && data.captcha_info.x !== undefined) {
+                    captchaOffset.x = Math.max(0, data.captcha_info.x - 10);
+                    captchaOffset.y = Math.max(0, data.captcha_info.y - 10);
+                    log(`验证码容器偏移: (${captchaOffset.x}, ${captchaOffset.y})`, 'info');
+                    log(`容器大小: ${data.captcha_info.width}x${data.captcha_info.height}`, 'info');
+                }
                 
-                displayScreenshot(data.screenshot, data.capture, data.captcha_info);
+                displayScreenshot(data.screenshot);
             }
 
             else if (type === 'screenshot_update') {
-                displayScreenshot(data.screenshot, data.capture, data.captcha_info);
+                displayScreenshot(data.screenshot);
                 
-                // 截图更新只表示服务端刷新了验证页面，不能等同于失败。
-                // 以前这里每次释放后都先显示“验证未通过”，即使官方页面仍在处理中。
+                // 如果是在等待验证结果时收到截图更新，说明验证失败
                 const currentStatus = document.getElementById('verificationStatus').textContent;
                 if (currentStatus === '验证中...') {
-                    log('验证页面已刷新，请等待官方结果或按新画面重试', 'info');
+                    log('⚠️ 验证未通过，请重试', 'error');
                     document.getElementById('verificationStatus').textContent = '待处理';
                 }
             }
@@ -506,34 +459,12 @@
                 }, 500);
             }
 
-            else if (type === 'input_ack') {
-                // 只表明事件已被服务器接收/排队，不将其伪装成验证码通过。
-                if (data.event_type === 'down' && isMouseDown) {
-                    setDragFeedback('远程验证页已开始接收拖动，继续平稳拖动…');
-                }
-            }
-
             else if (type === 'error') {
                 log(`错误: ${data.message}`, 'error');
             }
         }
 
-        function updateCaptureOrigin(capture, captchaInfo) {
-            document.getElementById('liveControlTip').classList.toggle('active', !captchaInfo);
-            if (capture && Number.isFinite(Number(capture.origin_x)) && Number.isFinite(Number(capture.origin_y))) {
-                captureOrigin.x = Number(capture.origin_x);
-                captureOrigin.y = Number(capture.origin_y);
-            } else if (captchaInfo && captchaInfo.x !== undefined) {
-                captureOrigin.x = Math.max(0, Number(captchaInfo.x) - 10);
-                captureOrigin.y = Math.max(0, Number(captchaInfo.y) - 10);
-            } else {
-                captureOrigin = {x: 0, y: 0};
-            }
-            log(`截图原点: (${captureOrigin.x}, ${captureOrigin.y})`, 'info');
-        }
-
-        function displayScreenshot(base64Image, capture, captchaInfo) {
-            if (!isMouseDown) updateCaptureOrigin(capture, captchaInfo);
+        function displayScreenshot(base64Image) {
             const img = new Image();
             img.onload = () => {
                 // 调整 canvas 大小（只在必要时调整）
@@ -562,10 +493,7 @@
                 return;
             }
 
-            event.preventDefault();
             isMouseDown = true;
-            setDragFeedback('正在转发拖动到验证页面…');
-            canvas.setPointerCapture?.(event.pointerId);
             const coords = getMouseCoords(event);
             
             log(`鼠标按下: (${coords.x}, ${coords.y})`, 'info');
@@ -583,7 +511,6 @@
                 return;
             }
 
-            event.preventDefault();
             // 节流：限制发送频率，避免卡顿
             const now = Date.now();
             if (now - lastMoveTime < moveThrottle) {
@@ -606,10 +533,7 @@
                 return;
             }
 
-            event.preventDefault();
             isMouseDown = false;
-            hideDragFeedback();
-            if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
             const coords = getMouseCoords(event);
             
             log(`鼠标释放: (${coords.x}, ${coords.y})`, 'info');
@@ -635,23 +559,13 @@
             const canvasX = Math.round((event.clientX - rect.left) * scaleX);
             const canvasY = Math.round((event.clientY - rect.top) * scaleY);
             
-            // 截图是页面 clip，必须使用服务端随截图返回的准确原点。
-            // 页面重排或降级为整页后，旧偏移会让人工拖动落到错误位置。
+            // 转换为页面上的实际坐标（加上偏移量）
             return {
-                x: canvasX + captureOrigin.x,
-                y: canvasY + captureOrigin.y
+                x: canvasX + captchaOffset.x,
+                y: canvasY + captchaOffset.y
             };
-        }
-
-        function setDragFeedback(message) {
-            const feedback = document.getElementById('dragFeedback');
-            document.getElementById('dragFeedbackText').textContent = message;
-            feedback.classList.add('active');
-        }
-
-        function hideDragFeedback() {
-            document.getElementById('dragFeedback').classList.remove('active');
         }
     </script>
 </body>
 </html>
+

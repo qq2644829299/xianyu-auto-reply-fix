@@ -162,9 +162,6 @@ cache/
 .playwright/
 playwright-report/
 test-results/
-browser_data/
-trajectory_history/
-update_backup/
 
 # 示例和演示文件
 example_*.py

@@ -10,12 +10,8 @@ AI回复引擎模块 - 统一意图识别与回复生成
 
 import json
 import time
-import os
-import re
-from datetime import datetime
 import requests
 import threading
-import asyncio
 from typing import List, Dict, Optional
 from loguru import logger
 from db_manager import db_manager
@@ -62,20 +58,6 @@ class AIReplyEngine:
         if self._is_gemini_api(settings):
             return 'gemini'
         return 'openai'
-
-    def _apply_platform_provider(self, settings: dict) -> dict:
-        """覆盖租户侧历史供应商参数，统一使用平台管理员配置的模型与密钥。"""
-        platform_key = (db_manager.get_system_setting('platform_ai_api_key') or os.getenv('PLATFORM_AI_API_KEY', '')).strip()
-        if not platform_key:
-            raise ValueError('平台 AI 服务尚未配置，请联系管理员')
-        resolved = dict(settings)
-        resolved.update({
-            'model_name': db_manager.get_system_setting('platform_ai_model_name') or 'deepseek-chat',
-            'base_url': db_manager.get_system_setting('platform_ai_base_url') or 'https://api.deepseek.com',
-            'api_type': db_manager.get_system_setting('platform_ai_api_type') or 'openai',
-            'api_key': platform_key,
-        })
-        return resolved
 
     def _is_dashscope_app_api(self, settings: dict) -> bool:
         """判断是否为DashScope应用API（/apps/模式）"""
@@ -399,21 +381,7 @@ class AIReplyEngine:
     def is_ai_enabled(self, cookie_id: str) -> bool:
         """检查指定账号是否启用AI回复"""
         settings = db_manager.get_ai_reply_settings(cookie_id)
-        return bool(settings['ai_enabled']) and self._is_reply_schedule_active(settings)
-
-    @staticmethod
-    def _is_reply_schedule_active(settings: dict) -> bool:
-        """按服务器 Asia/Shanghai 时区判断自定义回复时段，支持跨午夜。"""
-        if settings.get('reply_schedule_mode', 'all_day') != 'custom':
-            return True
-        try:
-            start = datetime.strptime(settings.get('reply_start_time', '00:00'), '%H:%M').time()
-            end = datetime.strptime(settings.get('reply_end_time', '23:59'), '%H:%M').time()
-            now = datetime.now().time()
-            return start <= now <= end if start <= end else (now >= start or now <= end)
-        except (TypeError, ValueError):
-            logger.warning('AI 回复时段配置无效，已按全天回复处理')
-            return True
+        return settings['ai_enabled']
     
     def _get_chat_lock(self, chat_id: str) -> threading.Lock:
         """获取指定chat_id的锁，如果不存在则创建"""
@@ -460,21 +428,11 @@ class AIReplyEngine:
                         return None
                 
                 # 1. 获取AI设置
-                settings = self._apply_platform_provider(db_manager.get_ai_reply_settings(cookie_id))
-                account_owner_id = db_manager.get_cookie_owner_id(cookie_id)
-                if account_owner_id is None:
-                    logger.error(f'无法确认账号 {cookie_id} 的额度归属，停止调用 AI')
-                    return None
-                if not db_manager.is_admin_user(account_owner_id) and db_manager.get_ai_credit_balance(account_owner_id) <= 0:
-                    logger.warning(f'账号 {cookie_id} 所属用户额度不足，停止 AI 回复')
-                    return None
+                settings = db_manager.get_ai_reply_settings(cookie_id)
                 custom_prompts = json.loads(settings['custom_prompts']) if settings['custom_prompts'] else {}
 
-                # 2. 当前会话固定取最近 10 条真实聊天记录（排除本系统 AI 旧回复）。
-                context = self.get_live_chat_context(chat_id, cookie_id, limit=10)
-                # 同商品下只参考卖家真人过往回答；不发送订单号、联系方式等敏感字段，
-                # 让常见问题可复用但不泄露其他买家的会话信息。
-                human_examples = self.get_item_human_reply_examples(cookie_id, item_id, limit=6)
+                # 2. 获取对话历史
+                context = self.get_conversation_context(chat_id, cookie_id)
 
                 # 3. 获取对话轮数和议价设置（供AI参考）
                 conversation_rounds = self.get_conversation_rounds(chat_id, cookie_id)
@@ -494,13 +452,9 @@ class AIReplyEngine:
                 context_str = ""
                 if context:
                     context_str = "\n".join([
-                        f"{'客户' if msg['role'] == 'user' else '卖家'}: {msg['content']}"
-                        for msg in context
+                        f"{'客户' if msg['role'] == 'user' else '客服'}: {msg['content']}" 
+                        for msg in context[-10:]
                     ])
-                examples_str = "\n".join([
-                    f"买家问题：{example['question']}\n卖家真人回答：{example['answer']}"
-                    for example in human_examples
-                ])
 
                 # 7. 构建用户消息（包含所有上下文）
                 user_prompt = f"""## 商品信息
@@ -508,10 +462,6 @@ class AIReplyEngine:
 
 ## 对话历史
 {context_str if context_str else '(新对话，暂无历史)'}
-
-## 同商品已验证的卖家真人问答（匿名参考）
-{examples_str if examples_str else '(暂无可复用的真人问答)'}
-请仅把这些问答当作商品服务口径参考；不要提及“其他买家”，不要复述任何订单号、联系方式、姓名、地址或账号信息。
 
 ## 对话状态
 - 当前对话轮数：第{conversation_rounds + 1}轮
@@ -555,27 +505,7 @@ class AIReplyEngine:
                     # openai / ollama / 空值 均走 chat/completions
                     reply = self._call_openai_chat_api(settings, messages, max_tokens=150, temperature=0.7)
 
-                # 10. 成功生成后才扣 1 次额度；以原消息时间作为幂等引用，重复事件不重复扣费。
-                usage_reference = f'ai:{cookie_id}:{chat_id}:{message_created_at}'
-                if not db_manager.consume_ai_credit(account_owner_id, cookie_id, chat_id, usage_reference):
-                    logger.warning(f'账号 {cookie_id} 额度扣减失败或已不足，放弃发送本次 AI 回复')
-                    now = time.time()
-                    quota_mail_times = getattr(self, '_quota_mail_times', {})
-                    if now - float(quota_mail_times.get(account_owner_id, 0) or 0) >= 6 * 3600:
-                        quota_mail_times[account_owner_id] = now
-                        self._quota_mail_times = quota_mail_times
-                        threading.Thread(
-                            target=lambda: asyncio.run(db_manager.send_platform_quota_email(
-                                account_owner_id,
-                                'insufficient',
-                                remaining_calls=db_manager.get_ai_credit_balance(account_owner_id),
-                            )),
-                            daemon=True,
-                            name=f'ai-quota-mail-{account_owner_id}',
-                        ).start()
-                    return None
-
-                # 11. 保存AI回复到对话记录
+                # 10. 保存AI回复到对话记录
                 self.save_conversation(chat_id, cookie_id, user_id, item_id, "assistant", reply, intent=None)
                 
                 logger.info(f"AI回复生成成功 (账号: {cookie_id}): {reply}")
@@ -619,74 +549,6 @@ class AIReplyEngine:
                 return context
         except Exception as e:
             logger.error(f"获取对话上下文失败: {e}")
-            return []
-
-    @staticmethod
-    def _sanitize_shared_context(content: str) -> str:
-        """用于跨买家参考的最小化脱敏，避免订单/联系方式等进入模型上下文。"""
-        text = re.sub(r'(?i)(订单号|订单|order\s*(?:id|no)?)[：:#\s-]*[A-Za-z0-9_-]{6,}', r'\1：［已隐藏］', str(content or ''))
-        text = re.sub(r'(?<!\d)1\d{10}(?!\d)', '［手机号已隐藏］', text)
-        text = re.sub(r'(?<!\d)\d{15,22}(?!\d)', '［编号已隐藏］', text)
-        text = re.sub(r'(?i)(微信|vx|v信|qq)[：:：\s]*[A-Za-z0-9_-]{5,}', r'\1：［已隐藏］', text)
-        return re.sub(r'\s+', ' ', text).strip()[:400]
-
-    def get_live_chat_context(self, chat_id: str, cookie_id: str, limit: int = 10) -> List[Dict]:
-        """当前会话最近 N 条：买家消息 + 非 AI 的卖家消息。"""
-        try:
-            with db_manager.lock:
-                cursor = db_manager.conn.cursor()
-                cursor.execute('''
-                    SELECT direction, content, reply_source
-                    FROM chat_messages
-                    WHERE cookie_id = ? AND chat_id = ? AND COALESCE(content, '') != ''
-                      AND (direction = 2 OR (direction = 1 AND COALESCE(reply_source, '') != 'AI'))
-                    ORDER BY id DESC LIMIT ?
-                ''', (cookie_id, chat_id, limit))
-                rows = list(reversed(cursor.fetchall()))
-            return [
-                {'role': 'user' if row[0] == 2 else 'seller', 'content': str(row[1])[:600]}
-                for row in rows
-            ]
-        except Exception as e:
-            logger.error(f"获取当前会话上下文失败: {e}")
-            return self.get_conversation_context(chat_id, cookie_id, limit=limit)
-
-    def get_item_human_reply_examples(self, cookie_id: str, item_id: str, limit: int = 6) -> List[Dict]:
-        """提取同商品下的“买家问题 → 卖家手动回答”，排除 AI、默认和关键词自动回复。"""
-        if not item_id:
-            return []
-        try:
-            with db_manager.lock:
-                cursor = db_manager.conn.cursor()
-                cursor.execute('''
-                    SELECT m.id, m.chat_id, m.content
-                    FROM chat_messages m
-                    WHERE m.cookie_id = ? AND m.item_id = ? AND m.direction = 1
-                      AND COALESCE(m.reply_source, '') IN ('手动', '人工')
-                      AND COALESCE(m.content, '') != ''
-                    ORDER BY m.id DESC LIMIT ?
-                ''', (cookie_id, item_id, limit * 3))
-                answers = cursor.fetchall()
-                examples = []
-                for message_id, example_chat_id, answer in answers:
-                    cursor.execute('''
-                        SELECT content FROM chat_messages
-                        WHERE cookie_id = ? AND chat_id = ? AND item_id = ?
-                          AND direction = 2 AND id < ? AND COALESCE(content, '') != ''
-                        ORDER BY id DESC LIMIT 1
-                    ''', (cookie_id, example_chat_id, item_id, message_id))
-                    question_row = cursor.fetchone()
-                    if not question_row:
-                        continue
-                    question = self._sanitize_shared_context(question_row[0])
-                    clean_answer = self._sanitize_shared_context(answer)
-                    if question and clean_answer:
-                        examples.append({'question': question, 'answer': clean_answer})
-                    if len(examples) >= limit:
-                        break
-            return list(reversed(examples))
-        except Exception as e:
-            logger.error(f"获取同商品真人问答失败: {e}")
             return []
     
     def save_conversation(self, chat_id: str, cookie_id: str, user_id: str, 

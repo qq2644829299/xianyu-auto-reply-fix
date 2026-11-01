@@ -11,9 +11,7 @@ services:
         http_proxy: ${HTTP_PROXY}
         https_proxy: ${HTTPS_PROXY}
         no_proxy: ${NO_PROXY}
-    # 线上由此目录本地构建并挂载源码；不要在普通重建时拉取上游镜像，
-    # 否则会覆盖当前部署分支的运行镜像并延长恢复时间。
-    image: xianyu-auto-reply-fix:latest
+    image: ghcr.io/gudong2003/xianyu-auto-reply-fix:latest
     container_name: xianyu-auto-reply-fix
     restart: unless-stopped
     # 内置 init 进程回收僵尸进程（chrome 子进程退出后无人 reap 会变 defunct，长期累积）
@@ -24,8 +22,9 @@ services:
     # 即使挂载了 Windows 文件，bash 也能正确处理
     entrypoint: ["/bin/bash", "-c", "dos2unix /app/entrypoint.sh 2>/dev/null || true; bash /app/entrypoint.sh"]
     ports:
-      # 仅由服务器上的 Nginx 反向代理访问，避免管理端和 VNC 直接暴露公网。
-      - "127.0.0.1:8090:8090"
+      - "9000:8090"
+      - "5900:5900"    # VNC 端口（可选，用于远程查看浏览器）
+      - "6080:6080"    # noVNC Web 端口（浏览器手动接管）
     volumes:
       # 数据持久化
       - ./data:/app/data:rw
@@ -43,7 +42,6 @@ services:
       - ENABLE_HEADFUL=true     # 启用有头模式
       - ENABLE_VNC=true         # 启用 VNC 服务器（可选）
       - DISPLAY=:99             # 虚拟显示编号
-      - PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=${PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:-/usr/bin/chromium}
       
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
       - PYTHONDONTWRITEBYTECODE=${PYTHONDONTWRITEBYTECODE:-1}

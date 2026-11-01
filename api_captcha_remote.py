@@ -10,7 +10,6 @@ from typing import Optional, List
 import asyncio
 import json
 import os
-from pathlib import Path
 from loguru import logger
 
 from utils.captcha_remote_control import captcha_controller
@@ -18,8 +17,6 @@ from utils.captcha_remote_control import captcha_controller
 
 # 创建路由器
 router = APIRouter(prefix="/api/captcha", tags=["captcha"])
-
-NOVNC_ROOT = Path('/usr/share/novnc')
 
 
 def _safe_json_for_inline_script(value: str) -> str:
@@ -128,54 +125,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
     logger.info(f"🔌 WebSocket 连接建立: {session_id}")
     
-    # 同一验证码只允许一个控制端。旧窗口仍在发送 move 时会与新窗口交错，
-    # 使人工拖动轨迹失效。
-    previous_websocket = captcha_controller.websocket_connections.get(session_id)
-    if previous_websocket and previous_websocket is not websocket:
-        try:
-            await previous_websocket.close(code=4001, reason='已由新的验证窗口接管')
-        except Exception:
-            pass
+    # 注册 WebSocket 连接
     captcha_controller.websocket_connections[session_id] = websocket
-    completion_task = None
-    completion_attempt = 0
-
-    async def watch_verification_result(attempt: int):
-        """在后台观察官方验证结果，绝不能阻塞下一次人工拖动事件。"""
-        try:
-            completed = False
-            for _ in range(5):
-                await asyncio.sleep(1.0)
-                if attempt != completion_attempt:
-                    return
-                completed = await captcha_controller.check_completion(session_id)
-                if completed:
-                    await asyncio.sleep(0.4)
-                    if attempt != completion_attempt:
-                        return
-                    completed = await captcha_controller.check_completion(session_id)
-                    break
-
-            if attempt != completion_attempt or captcha_controller.websocket_connections.get(session_id) is not websocket:
-                return
-            if completed:
-                await websocket.send_json({
-                    'type': 'completed',
-                    'message': '验证成功！'
-                })
-                logger.success(f"✅ 验证完成: {session_id}")
-            else:
-                # 只在本次仍是最新的一次释放时回传截图，避免旧检查覆盖新拖动。
-                snapshot = await captcha_controller.update_screenshot(session_id)
-                if attempt == completion_attempt and snapshot:
-                    await websocket.send_json({
-                        'type': 'screenshot_update',
-                        **snapshot,
-                    })
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning(f"验证结果观察失败: {session_id}: {exc}")
     
     try:
         # 发送初始会话信息
@@ -185,7 +136,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 'type': 'session_info',
                 'screenshot': session_data['screenshot'],
                 'captcha_info': session_data['captcha_info'],
-                'capture': session_data.get('capture') or {'origin_x': 0, 'origin_y': 0},
                 'viewport': session_data['viewport']
             })
             
@@ -204,9 +154,6 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         # 持续接收客户端消息
         while True:
             data = await websocket.receive_json()
-            if captcha_controller.websocket_connections.get(session_id) is not websocket:
-                await websocket.close(code=4001, reason='验证窗口已被替换')
-                return
             msg_type = data.get('type')
             
             if msg_type == 'mouse_event':
@@ -220,28 +167,44 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 )
                 
                 if success:
-                    # 这是输入已进入服务端转发队列的确认，不代表官方验证码结果。
-                    # 让前端在拖动时给出明确反馈，而无需对每个 move 截图。
-                    if event_type != 'move':
-                        await websocket.send_json({
-                            'type': 'input_ack',
-                            'event_type': event_type,
-                        })
                     # 只在鼠标释放后才检查完成状态
                     if event_type == 'up':
-                        # 结果观察与截图都可能耗时数秒；不能卡住 receive_json，
-                        # 否则用户下一次拖动会积压，闲鱼收到的就不是实时轨迹。
-                        completion_attempt += 1
-                        if completion_task and not completion_task.done():
-                            completion_task.cancel()
-                        completion_task = asyncio.create_task(
-                            watch_verification_result(completion_attempt),
-                            name=f'captcha-completion-{session_id}',
-                        )
+                        # 等待页面更新（给验证码一些反应时间）
+                        await asyncio.sleep(1.0)
+                        
+                        # 多次确认滑块确实消失
+                        completed = await captcha_controller.check_completion(session_id)
+                        
+                        if completed:
+                            # 再次确认（避免误判）
+                            await asyncio.sleep(0.5)
+                            completed = await captcha_controller.check_completion(session_id)
+                        
+                        if completed:
+                            await websocket.send_json({
+                                'type': 'completed',
+                                'message': '验证成功！'
+                            })
+                            logger.success(f"✅ 验证完成: {session_id}")
+                            break
+                        else:
+                            # 更新截图显示验证结果
+                            screenshot = await captcha_controller.update_screenshot(session_id)
+                            if screenshot:
+                                await websocket.send_json({
+                                    'type': 'screenshot_update',
+                                    'screenshot': screenshot
+                                })
                     else:
-                        # 拖动时不截屏。截屏会阻塞后续 move 事件、重绘前端画面，
-                        # 使鼠标轨迹被打断，人工滑块永远无法形成连续手势。
-                        pass
+                        # 按下或移动时，实时更新截图（截取整个验证码容器）
+                        if event_type in ['down', 'move']:
+                            # 截取整个验证码容器，降低质量换取速度
+                            screenshot = await captcha_controller.update_screenshot(session_id, quality=30)
+                            if screenshot:
+                                await websocket.send_json({
+                                    'type': 'screenshot_update',
+                                    'screenshot': screenshot
+                                })
             
             elif msg_type == 'check_completion':
                 # 手动检查完成状态
@@ -267,10 +230,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         logger.error(traceback.format_exc())
     
     finally:
-        if completion_task and not completion_task.done():
-            completion_task.cancel()
         # 清理
-        if captcha_controller.websocket_connections.get(session_id) is websocket:
+        if session_id in captcha_controller.websocket_connections:
             del captcha_controller.websocket_connections[session_id]
         
         logger.info(f"🔒 WebSocket 会话结束: {session_id}")
@@ -317,12 +278,12 @@ async def get_session_info(session_id: str):
 @router.get("/screenshot/{session_id}")
 async def get_screenshot(session_id: str):
     """获取最新截图"""
-    snapshot = await captcha_controller.update_screenshot(session_id)
+    screenshot = await captcha_controller.update_screenshot(session_id)
     
-    if not snapshot:
+    if not screenshot:
         raise HTTPException(status_code=404, detail="无法获取截图")
     
-    return snapshot
+    return {'screenshot': screenshot}
 
 
 @router.post("/mouse_event")
@@ -438,85 +399,3 @@ async def captcha_control_page_with_session(session_id: str):
     else:
         raise HTTPException(status_code=404, detail="前端页面不存在")
 
-
-# =============================================================================
-# 官方页面人工验证：noVNC 只展示同一台服务器浏览器，不复制验证码画面。
-# =============================================================================
-
-@router.get('/desktop/view/{session_id}', response_class=HTMLResponse)
-async def official_verification_desktop(session_id: str):
-    """打开承载闲鱼官方验证层的原始 Chromium 页面。"""
-    if not captcha_controller.get_desktop_session(session_id):
-        raise HTTPException(status_code=404, detail='验证会话不存在或已过期，请重新发起验证')
-    if not (NOVNC_ROOT / 'vnc.html').is_file():
-        raise HTTPException(status_code=503, detail='服务器未安装官方页面显示组件，请联系管理员检查部署')
-    websocket_path = f'api/captcha/desktop/ws/{session_id}'
-    return HTMLResponse(f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1"><title>闲鱼官方验证</title>
-    <style>html,body,iframe{{margin:0;width:100%;height:100%;overflow:hidden;background:#fff}}.tip{{position:fixed;z-index:3;right:16px;bottom:12px;padding:8px 12px;border-radius:8px;background:#ffffffdf;color:#475569;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 12px #0002}}</style></head>
-    <body><iframe title="闲鱼官方验证页面" src="/api/captcha/desktop/vnc.html?autoconnect=1&resize=scale&path={websocket_path}"></iframe><div class="tip">请直接在闲鱼官方页面完成验证</div></body></html>''')
-
-
-@router.get('/desktop/{resource_path:path}')
-async def novnc_static_resource(resource_path: str):
-    """只提供 noVNC 自带的静态页面；控制连接仍需有效的随机会话。"""
-    requested = (NOVNC_ROOT / resource_path).resolve()
-    try:
-        requested.relative_to(NOVNC_ROOT.resolve())
-    except ValueError:
-        raise HTTPException(status_code=404, detail='资源不存在')
-    if not requested.is_file():
-        raise HTTPException(status_code=404, detail='资源不存在')
-    return FileResponse(requested)
-
-
-@router.websocket('/desktop/ws/{session_id}')
-async def official_verification_desktop_ws(websocket: WebSocket, session_id: str):
-    """受随机会话保护的 noVNC 到本容器 VNC 的二进制转发。"""
-    if not captcha_controller.get_desktop_session(session_id):
-        await websocket.close(code=4404, reason='验证会话不存在或已过期')
-        return
-    await websocket.accept()
-    writer = None
-    try:
-        reader, writer = await asyncio.open_connection('127.0.0.1', 5900)
-
-        async def browser_to_vnc():
-            while True:
-                message = await websocket.receive()
-                if message.get('type') == 'websocket.disconnect':
-                    return
-                payload = message.get('bytes')
-                if payload is not None:
-                    writer.write(payload)
-                    await writer.drain()
-
-        async def vnc_to_browser():
-            while True:
-                payload = await reader.read(65536)
-                if not payload:
-                    return
-                await websocket.send_bytes(payload)
-
-        tasks = [asyncio.create_task(browser_to_vnc()), asyncio.create_task(vnc_to_browser())]
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        for task in done:
-            task.result()
-    except WebSocketDisconnect:
-        pass
-    except Exception as exc:
-        logger.warning(f'官方验证桌面连接失败: {session_id}: {exc}')
-        try:
-            await websocket.close(code=1011, reason='桌面连接失败')
-        except Exception:
-            pass
-    finally:
-        if writer:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass

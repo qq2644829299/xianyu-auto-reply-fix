@@ -24,9 +24,8 @@ ENV TZ=Asia/Shanghai
 ENV DOCKER_ENV=true
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# 生产环境会校验软件源签名。使用 HTTPS 镜像，避免 HTTP 镜像被网络中间层
-# 替换后触发“签名无效”，同时避开官方源在当前服务器网络中的长时间卡住。
-RUN sed -i 's|http://deb.debian.org/debian-security|https://mirrors.ustc.edu.cn/debian-security|g; s|http://deb.debian.org/debian|https://mirrors.ustc.edu.cn/debian|g' /etc/apt/sources.list.d/debian.sources
+#更换中科大源
+RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
 
 # 安装系统依赖（包括Playwright浏览器依赖）
 RUN apt-get update && \
@@ -43,7 +42,6 @@ RUN apt-get update && \
         libfreetype6-dev \
         fonts-dejavu-core \
         fonts-liberation \
-        fonts-noto-cjk \
         # Playwright浏览器依赖
         libnss3 \
         libnspr4 \
@@ -72,11 +70,8 @@ RUN apt-get update && \
         libxfixes3 \
         xdg-utils \
         chromium \
-        xvfb \
-        x11vnc \
         novnc \
         websockify \
-        fluxbox \
         # OpenCV运行时依赖
         libgl1 \
         libglib2.0-0 \
@@ -100,9 +95,9 @@ RUN pip install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.c
 # 复制项目文件
 COPY . .
 
-# Debian 已通过 apt 安装 Chromium。复用该浏览器，避免首次部署时从
-# Playwright CDN 额外下载约 170MB 的浏览器包。
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+# 安装Playwright浏览器（必须在复制项目文件之后）
+RUN playwright install chromium && \
+    playwright install-deps chromium
 
 # 创建必要的目录并设置权限
 RUN mkdir -p /app/logs /app/data /app/backups /app/static/uploads/images && \

@@ -11945,13 +11945,117 @@ class RedeemActivationCode(BaseModel):
     code: str
 
 
+# 云端 AI 配置内存缓存（绝不落盘：密钥不进本地数据库、不进 exe）
+_CLOUD_AI_CACHE: Dict[str, Any] = {"value": None, "fetched_at": 0.0}
+_CLOUD_AI_TTL = 300.0
+
+
+def _fetch_cloud_ai_config() -> Dict[str, Any]:
+    """从云端拉取平台 AI 配置（仅存内存，TTL 5 分钟）。
+
+    桌面客户端不保存密钥：万一 exe 被解包也拿不到 key。
+    优先顺序：环境变量 -> 云端 -> 本地库（服务器部署场景才用本地库）。
+    """
+    env_key = os.getenv('PLATFORM_AI_API_KEY', '').strip()
+    if env_key:
+        return {'api_key': env_key}
+
+    now = time.time()
+    cached = _CLOUD_AI_CACHE.get("value")
+    if cached and (now - _CLOUD_AI_CACHE["fetched_at"]) < _CLOUD_AI_TTL:
+        return dict(cached)
+
+    url = str(os.getenv('CLOUD_AI_CONFIG_URL', '') or '').strip()
+    token = str(os.getenv('CLOUD_AI_CONFIG_TOKEN', '') or '').strip()
+    if not url:
+        try:
+            from config import CLOUD_AI as _ca
+            url = str(_ca.get('url') or '').strip()
+            token = token or str(_ca.get('token') or '').strip()
+        except Exception:
+            pass
+    if not url:
+        return {}
+
+    try:
+        import httpx
+        from urllib.parse import quote as _quote
+        req_url = url
+        if token:
+            sep = '&' if '?' in url else '?'
+            req_url = f"{url}{sep}token={_quote(token, safe='')}"
+        with httpx.Client(timeout=8.0, follow_redirects=True) as client:
+            resp = client.get(req_url, headers={'Authorization': f'Bearer {token}'} if token else {})
+        if resp.status_code != 200:
+            logger.warning(f"云端 AI 配置拉取失败: HTTP {resp.status_code}")
+            return {}
+        data = resp.json() or {}
+        key = str(data.get('api_key') or '').strip()
+        if key:
+            payload = {
+                'api_key': key,
+                'model_name': str(data.get('model_name') or '').strip(),
+                'base_url': str(data.get('base_url') or '').strip().rstrip('/'),
+                'api_type': str(data.get('api_type') or '').strip(),
+            }
+            _CLOUD_AI_CACHE["value"] = payload
+            _CLOUD_AI_CACHE["fetched_at"] = now
+            logger.info("已从云端获取平台 AI 配置（未落盘）")
+            return dict(payload)
+    except Exception as exc:
+        logger.warning(f"云端 AI 配置拉取异常: {exc}")
+    return {}
+
+
+def _fetch_cloud_ai_key() -> str:
+    """兼容旧调用点：只取密钥。"""
+    return str(_fetch_cloud_ai_config().get('api_key') or '')
+
+
 def _platform_ai_config() -> dict:
-    """从平台设置读取 AI 配置，供所有租户的回复任务统一使用。"""
+    """读取 AI 配置，供所有租户的回复任务统一使用。
+
+    密钥优先级：环境变量 -> 云端拉取（仅内存）-> 本地库。
+    桌面客户端走云端，本地库里没有 key，exe 被解包也泄露不了。
+    """
+    cloud = _fetch_cloud_ai_config()
     return {
+        'model_name': cloud.get('model_name') or db_manager.get_system_setting('platform_ai_model_name') or 'deepseek-chat',
+        'base_url': cloud.get('base_url') or db_manager.get_system_setting('platform_ai_base_url') or 'https://api.deepseek.com',
+        'api_type': cloud.get('api_type') or db_manager.get_system_setting('platform_ai_api_type') or 'openai',
+        'api_key': cloud.get('api_key') or db_manager.get_system_setting('platform_ai_api_key') or '',
+    }
+
+
+@app.get('/api/cloud/ai-config')
+def cloud_ai_config(token: str = ''):
+    """供桌面客户端拉取平台 AI 密钥（云端下发，客户端不落盘）。
+
+    鉴权用共享令牌（CLOUD_AI.token 或环境变量 CLOUD_AI_CONFIG_TOKEN）。
+    令牌未配置时拒绝，避免裸奔把密钥发给任何人。
+    """
+    expected = str(db_manager.get_system_setting('cloud_ai_token') or '').strip()
+    if not expected:
+        expected = str(os.getenv('CLOUD_AI_CONFIG_TOKEN', '') or '').strip()
+    if not expected:
+        try:
+            from config import CLOUD_AI as _ca
+            expected = str(_ca.get('token') or '').strip()
+        except Exception:
+            expected = ''
+    if not expected:
+        raise HTTPException(status_code=403, detail='云端 AI 配置未启用')
+    if token != expected:
+        raise HTTPException(status_code=401, detail='令牌无效')
+
+    key = db_manager.get_system_setting('platform_ai_api_key') or os.getenv('PLATFORM_AI_API_KEY', '').strip()
+    if not key:
+        raise HTTPException(status_code=404, detail='服务端未配置平台 AI 密钥')
+    return {
+        'api_key': key,
         'model_name': db_manager.get_system_setting('platform_ai_model_name') or 'deepseek-chat',
         'base_url': db_manager.get_system_setting('platform_ai_base_url') or 'https://api.deepseek.com',
         'api_type': db_manager.get_system_setting('platform_ai_api_type') or 'openai',
-        'api_key': db_manager.get_system_setting('platform_ai_api_key') or os.getenv('PLATFORM_AI_API_KEY', '').strip(),
     }
 
 

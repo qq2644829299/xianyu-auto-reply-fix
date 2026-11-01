@@ -51,6 +51,9 @@ def main() -> None:
         ('announcement.json', '.'),
     ]:
         command.extend(add_data(source, destination))
+    # 云端 AI 共享令牌单独放文件，不进版本库；有才打包，缺了也不影响构建。
+    if (ROOT / 'cloud_ai_token.txt').exists():
+        command.extend(add_data('cloud_ai_token.txt', '.'))
     command.extend([
         '--collect-submodules', 'utils',
         '--collect-submodules', 'fastapi',

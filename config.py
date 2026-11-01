@@ -1,4 +1,5 @@
-﻿import os
+import os
+import sys
 import yaml
 from typing import Dict, Any
 
@@ -226,3 +227,32 @@ else:
 DEPLOY_MODE = (os.environ.get('DEPLOY_MODE') or config.get('DEPLOY_MODE', 'desktop') or 'desktop').strip().lower()
 
 
+
+# ======================================================================
+# 云端 AI 配置（桌面客户端不保存密钥，运行时从云端拉取，仅存内存）
+# ======================================================================
+# url  : 云端下发接口，如 https://你的服务器/api/cloud/ai-config
+# token: 共享令牌，需与服务端一致；留空则禁用云端拉取
+# 令牌优先取环境变量，其次读同目录 cloud_ai_token.txt（不进版本库），最后读 yml。
+def _read_cloud_token() -> str:
+    env_token = (os.environ.get('CLOUD_AI_CONFIG_TOKEN') or '').strip()
+    if env_token:
+        return env_token
+    for candidate in (
+        os.path.join(os.path.dirname(__file__), 'cloud_ai_token.txt'),
+        os.path.join(os.path.dirname(os.path.abspath(sys.argv[0] or '.')), 'cloud_ai_token.txt'),
+    ):
+        try:
+            if candidate and os.path.exists(candidate):
+                with open(candidate, 'r', encoding='utf-8-sig') as handle:
+                    value = handle.read().strip()
+                if value:
+                    return value
+        except Exception:
+            continue
+    return ''
+
+
+CLOUD_AI = dict(config.get('CLOUD_AI', {}) or {})
+CLOUD_AI['url'] = (os.environ.get('CLOUD_AI_CONFIG_URL') or CLOUD_AI.get('url') or '').strip()
+CLOUD_AI['token'] = (_read_cloud_token() or str(CLOUD_AI.get('token') or '')).strip()
