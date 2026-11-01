@@ -116,6 +116,63 @@ def _open_fallback_browser(port: int) -> None:
         pass
 
 
+def _desktop_css() -> str:
+    """读取桌面专用样式（去网页化）。打包后从 _MEIPASS/desktop_ui 读。"""
+    candidates = [
+        resource_root() / 'desktop_ui' / 'desktop.css',
+        Path(__file__).resolve().parent / 'desktop_ui' / 'desktop.css',
+    ]
+    for p in candidates:
+        try:
+            if p.is_file():
+                return p.read_text(encoding='utf-8')
+        except Exception:
+            continue
+    return ''
+
+
+def _inject_desktop_look(window) -> None:
+    """页面加载完成后注入桌面化样式与行为。
+
+    - 细圆角滚动条、禁选文本、禁图片拖拽、系统字体、去焦点虚线圈
+    - 禁用右键菜单与 F5/Ctrl+R 刷新（桌面应用不该有浏览器菜单）
+    """
+    css = _desktop_css()
+    js_css = ''
+    if css:
+        # 用 JSON 编码避免引号/换行破坏注入
+        import json as _json
+        js_css = (
+            "(function(){var s=document.getElementById('fc-desktop-style')||document.createElement('style');"
+            "s.id='fc-desktop-style';s.textContent=" + _json.dumps(css) + ";"
+            "document.head.appendChild(s);})();"
+        )
+
+    js_behavior = """
+    (function(){
+      if (window.__fcDesktopHooked) return;
+      window.__fcDesktopHooked = true;
+      // 右键菜单：输入框内保留，其它位置屏蔽（桌面应用没有"网页右键"）
+      document.addEventListener('contextmenu', function(e){
+        var t = e.target;
+        var editable = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+        if (!editable) e.preventDefault();
+      }, true);
+      // 屏蔽刷新快捷键，避免误刷新丢失当前页面状态
+      document.addEventListener('keydown', function(e){
+        var k = (e.key || '').toLowerCase();
+        if (k === 'f5' || ((e.ctrlKey || e.metaKey) && k === 'r')) e.preventDefault();
+      }, true);
+    })();
+    """
+    try:
+        if js_css:
+            window.evaluate_js(js_css)
+        window.evaluate_js(js_behavior)
+    except Exception as exc:
+        print(f'[WARN] 注入桌面样式失败（不影响使用）: {exc}')
+
+
 def main() -> None:
     data_root = prepare_local_runtime()
 
@@ -125,7 +182,9 @@ def main() -> None:
     # 2) 等后端就绪（首次启动要初始化数据库与依赖）
     ready = wait_for_local_server(LOCAL_PORT, timeout=120)
     _BACKEND['ready'] = ready
-    url = f'http://127.0.0.1:{LOCAL_PORT}'
+    # 直接进管理面板：'/' 是给搜索引擎看的营销官网（landing.html），
+    # 桌面客户端进去会看到"官网/注册/登录"，非常网页化。
+    url = f'http://127.0.0.1:{LOCAL_PORT}/admin'
 
     # 3) 原生窗口（pywebview + WebView2），不是浏览器标签页
     try:
@@ -149,9 +208,16 @@ def main() -> None:
                 height=520,
                 background_color='#0f172a',
             )
+
+        if ready:
+            # 页面每次加载完都注入一次（面板有 SPA 式重渲染）
+            try:
+                window.events.loaded += lambda: _inject_desktop_look(window)
+            except Exception:
+                pass
+
         # gui='edgechromium' 强制 WebView2，避免落到 mshtml 等老后端
-        webview.start(gui='edgechromium')
-        # 窗口关闭 -> 主线程结束 -> 进程退出（daemon 线程随之结束）
+        webview.start(gui='edgechromium', debug=False)
         return
     except Exception as exc:  # noqa: BLE001
         _BACKEND['window_error'] = f'{type(exc).__name__}: {exc}'

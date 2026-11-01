@@ -1,4 +1,4 @@
-"""用 PyInstaller 构建本地客户端。macOS 输出 .app，Windows 输出 .exe。"""
+﻿"""用 PyInstaller 构建本地客户端。macOS 输出 .app，Windows 输出 .exe。"""
 from __future__ import annotations
 
 import platform
@@ -42,6 +42,7 @@ def main() -> None:
         command.append('--onefile')
     for source, destination in [
         ('static', 'static'),
+        ('desktop_ui', 'desktop_ui'),
         ('global_config.yml', '.'),
         ('announcement.json', '.'),
     ]:
@@ -72,3 +73,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+

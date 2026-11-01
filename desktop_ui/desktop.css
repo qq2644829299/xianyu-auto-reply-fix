@@ -1,0 +1,89 @@
+/* 桌面客户端专用样式覆盖。
+ *
+ * 目标：把 Web 管理面板"去网页化"，让它看起来像原生桌面应用而不是浏览器里的网站。
+ * 只在 PyInstaller 桌面客户端里注入（desktop_launcher 通过 pywebview 注入），
+ * 不影响浏览器访问 Web 面板时的观感。
+ *
+ * 主要处理：
+ *   1. 滚动条：从系统默认的粗条改成细圆角，去掉"网页"感；
+ *   2. 文本选择：桌面应用一般不允许随意拖选（输入框除外）；
+ *   3. 图片拖拽：禁用浏览器式的图片拖出行为；
+ *   4. 字体：Windows 用 Microsoft YaHei UI / Segoe UI，贴合系统应用；
+ *   5. 焦点框：去掉浏览器默认的蓝色虚线焦点圈；
+ *   6. 超链接：去掉下划线与手型光标以外的网页特征。
+ */
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.32);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------- 文本选择：仅输入类元素可选 ---------- */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+input,
+textarea,
+select,
+[contenteditable="true"],
+.selectable,
+pre,
+code,
+table td,
+table th {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ---------- 图片不拖拽 ---------- */
+img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+
+/* ---------- 链接：不要网页式下划线 ---------- */
+a,
+a:hover,
+a:focus {
+  text-decoration: none;
+}
+
+/* ---------- 去掉浏览器默认虚线焦点圈 ---------- */
+*:focus {
+  outline: none !important;
+}
+*:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.55) !important;
+  outline-offset: 1px;
+}
+
+/* ---------- 模态框：贴近桌面对话框观感 ---------- */
+.modal-content {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------- 抑制浏览器式的"已访问"变色 ---------- */
+a:visited {
+  color: inherit;
+}

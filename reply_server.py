@@ -983,9 +983,31 @@ def verify_admin_token(credentials: Optional[HTTPAuthorizationCredentials] = Dep
     return user_info
 
 
+def _local_client_admin() -> Dict[str, Any]:
+    """本地桌面客户端的内置管理员身份。
+
+    桌面版只监听 127.0.0.1、数据全在本机，安全边界是"谁能打开这台电脑"，
+    不应该再让用户先登录一个 Web 门户才能用 —— 那正是"太网页化"的主要来源。
+    """
+    try:
+        cursor = db_manager.conn.cursor()
+        db_manager._execute_sql(
+            cursor, "SELECT id, username FROM users WHERE is_admin = 1 LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if row:
+            return {'user_id': row[0], 'username': row[1], 'is_admin': True}
+    except Exception:
+        pass
+    return {'user_id': 1, 'username': 'admin', 'is_admin': True}
+
+
 def require_auth(user_info: Optional[Dict[str, Any]] = Depends(verify_token)):
     """需要认证的依赖，返回用户信息"""
     if not user_info:
+        # 本地桌面客户端直接视为管理员（仅监听 127.0.0.1，不外露）
+        if os.getenv('FISHCLOUD_LOCAL_CLIENT') == '1':
+            return _local_client_admin()
         raise HTTPException(status_code=401, detail="未授权访问")
     return user_info
 
@@ -7052,7 +7074,10 @@ async def generate_qr_code(current_user: Dict[str, Any] = Depends(get_current_us
                 sess = BrowserIMSession(
                     cookie_id=f"__qr_{uuid.uuid4().hex[:8]}",
                     cookies_str="",
-                    headless=bool(BROWSER_IM.get('headless', True)),
+                    # 扫码用无头：二维码已经通过本接口回传给前端模态框显示，
+                    # 用户不需要额外看到一个浏览器窗口（那正是"网页感"的来源）。
+                    # 若某些账号在无头下被风控拦，可把 qr_headless 设为 false 打开可见窗口。
+                    headless=bool(BROWSER_IM.get('qr_headless', True)),
                     navigate_home=False,   # 扫码不需要加载 IM 页
                 )
                 await sess.start()

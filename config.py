@@ -161,7 +161,8 @@ BROWSER_IM = config.get('BROWSER_IM', {
     'fallback_to_direct_ws': True,      # 浏览器起不来时回退原直连 WSS 逻辑
     'reuse_persistent_browser': True,   # 复用 utils/persistent_browser 的常驻浏览器，避免重复开 Chromium
     'executable_path': '',
-    'qr_login_in_browser': True,          # 扫码走常驻浏览器（同 profile，避免取 cookie 失败）
+    'qr_login_in_browser': True,
+    'qr_headless': True,          # 扫码走常驻浏览器（同 profile，避免取 cookie 失败）
     'qr_timeout_seconds': 180,            # 扫码有效期              # 浏览器路径；留空自动探测（容器内通常为 /usr/bin/chromium）
 })
 
@@ -223,4 +224,5 @@ else:
 # desktop : 桌面客户端承担浏览器相关全部工作（登录/扫码/滑块/抓页面）
 # 由环境变量 DEPLOY_MODE 或本配置控制，默认 desktop（保持原行为）。
 DEPLOY_MODE = (os.environ.get('DEPLOY_MODE') or config.get('DEPLOY_MODE', 'desktop') or 'desktop').strip().lower()
+
 

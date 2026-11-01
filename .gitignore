@@ -835,3 +835,5 @@ test_php_stats.py
 !utils/mtop_order_api.py
 !desktop_launcher.py
 !desktop/
+!desktop_ui/
+!desktop_ui/*.css
