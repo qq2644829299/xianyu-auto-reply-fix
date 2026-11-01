@@ -70,15 +70,37 @@ def prepare_local_runtime() -> Path:
     # ---- 形态 B：桌面客户端承担全部浏览器工作 ----
     # desktop 模式允许启用浏览器兜底；server 模式才会禁用。
     os.environ.setdefault('DEPLOY_MODE', 'desktop')
-    # 有头运行：验证码/滑块需要人眼确认，且真实窗口的指纹远比无头可信。
-    # 用环境变量覆盖打包进 exe 的 global_config.yml，避免每次升级配置被重置。
-    os.environ.setdefault('XY_BROWSER_HEADLESS', '0')
+    # 浏览器默认**无头**：有头会额外弹出一个可见的 Edge 窗口，用户会以为
+    # 客户端"又开了一个浏览器"。桌面版靠页内自动滑块处理验证；确实需要人工
+    # 介入时，把下面这行改成 '0'（或配置文件 headless: false）即可看到窗口。
+    os.environ.setdefault('XY_BROWSER_HEADLESS', '1')
     # 浏览器 profile 落到用户目录，升级/重装不丢登录态。
     os.environ.setdefault('FISHCLOUD_BROWSER_DATA', str(browser_root))
 
     if str(app_root) not in sys.path:
         sys.path.insert(0, str(app_root))
     return data_root
+
+
+def _ensure_std_streams(data_root: Path) -> None:
+    """--windowed 打包后 sys.stdout / sys.stderr 是 None。
+
+    uvicorn 配置日志 formatter 时会去拿 stderr，None 直接抛
+    "Unable to configure formatter 'default'"，服务根本起不来
+    （表现就是端口通了但 HTTP 无响应）。这里把它们指向日志文件。
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        log_dir = data_root / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = open(log_dir / 'console.log', 'a', encoding='utf-8', errors='ignore')
+        if sys.stdout is None:
+            sys.stdout = log_file
+        if sys.stderr is None:
+            sys.stderr = log_file
+    except Exception:
+        pass
 
 
 ERROR_HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
@@ -105,15 +127,6 @@ def _run_backend() -> None:
         pass
     except Exception as exc:  # noqa: BLE001
         _BACKEND['error'] = f'{type(exc).__name__}: {exc}'
-
-
-def _open_fallback_browser(port: int) -> None:
-    """原生窗口不可用时的兜底：用系统浏览器打开本地管理页。"""
-    try:
-        import webbrowser
-        webbrowser.open(f'http://127.0.0.1:{port}')
-    except Exception:
-        pass
 
 
 def _desktop_css() -> str:
@@ -209,6 +222,10 @@ def _patch_playwright_browser_path() -> None:
             def make(orig_fn):
                 def wrapper(self, *args, **kwargs):
                     kwargs.setdefault('executable_path', exe)
+                    # 关键：默认无头，否则订单抓取 / Cookie 刷新会各拉一个
+                    # **可见的** Edge 浏览器窗口出来（用户看到的"多开一个浏览器"
+                    # 就是这些进程）。需要人眼介入的滑块会显式传 headless=False。
+                    kwargs.setdefault('headless', True)
                     return orig_fn(self, *args, **kwargs)
 
                 wrapper.__fc_patched__ = True
@@ -237,8 +254,38 @@ def _patch_playwright_browser_path() -> None:
         print('[WARN] Playwright 浏览器路径注入未生效')
 
 
+def _show_fatal_error(message: str, data_root: Path = None) -> None:
+    """原生错误提示框（不依赖浏览器）。
+
+    绝不再用 webbrowser.open 兜底 —— 那会让用户看到一个浏览器窗口，
+    误以为这个客户端只是个网页壳子，也破坏了桌面应用的观感。
+    """
+    detail = message
+    if data_root is not None:
+        detail += f'\n\n日志目录：{data_root / "logs"}'
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror('鱼智云本地客户端', detail)
+        root.destroy()
+        return
+    except Exception:
+        pass
+    # 最后手段：写文件，避免静默失败
+    try:
+        if data_root is not None:
+            p = data_root / 'logs' / 'desktop_launcher_error.txt'
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(detail, encoding='utf-8')
+    except Exception:
+        pass
+
+
 def main() -> None:
     data_root = prepare_local_runtime()
+    _ensure_std_streams(data_root)
     _patch_playwright_browser_path()
 
     # 1) 后端放子线程（Start.py 内部是 asyncio 永久等待，天然适合当服务）
@@ -287,17 +334,18 @@ def main() -> None:
         return
     except Exception as exc:  # noqa: BLE001
         _BACKEND['window_error'] = f'{type(exc).__name__}: {exc}'
-        print(f'[WARN] 原生窗口启动失败，退回系统浏览器: {exc}')
+        _show_fatal_error(
+            f'原生窗口启动失败：{type(exc).__name__}: {exc}\n'
+            f'请确认已安装 Microsoft Edge WebView2 运行时。',
+            data_root,
+        )
+        return
 
-    # 4) 兜底：系统浏览器
-    _open_fallback_browser(LOCAL_PORT)
-    # 阻止主线程退出，保持后端继续运行
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        pass
+    # 4) 走到这里说明既没有窗口也没有可用的兜底 —— 明确报错而不是静默打开浏览器
+    _show_fatal_error('本地服务未能就绪，窗口无法显示。', data_root)
 
 
 if __name__ == '__main__':
     main()
+
+

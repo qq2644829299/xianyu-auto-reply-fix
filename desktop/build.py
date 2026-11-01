@@ -1,4 +1,4 @@
-﻿"""用 PyInstaller 构建本地客户端。macOS 输出 .app，Windows 输出 .exe。"""
+"""用 PyInstaller 构建本地客户端。macOS 输出 .app，Windows 输出 .exe。"""
 from __future__ import annotations
 
 import platform
@@ -40,6 +40,10 @@ def main() -> None:
             command.append('--windowed')
     else:
         command.append('--onefile')
+        # Windows 之前漏了 --windowed，导致每次启动都弹一个 cmd 黑窗口。
+        # 需要看日志排错时用 FISHCLOUD_CONSOLE_BUILD=1 打包即可。
+        if not os.getenv('FISHCLOUD_CONSOLE_BUILD'):
+            command.append('--windowed')
     for source, destination in [
         ('static', 'static'),
         ('desktop_ui', 'desktop_ui'),
