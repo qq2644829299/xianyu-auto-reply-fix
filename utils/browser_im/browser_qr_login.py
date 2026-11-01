@@ -51,6 +51,47 @@ LOGIN_PAGE_URLS = (
 
 RISK_URL_HINTS = ("punish", "_____tmd_____", "x5secdata", "sec.taobao.com")
 
+# 触发 `_m_h5_tk` 下发。
+#
+# 扫码登录成功只会拿到 passport 主站的登录 cookie，**不含 `_m_h5_tk`**；
+# 而 `_m_h5_tk` 是 h5api.m.goofish.com 这个域下发的，只有访问过该域才会有。
+# 没有它，后续所有 mtop 调用都会报 FAIL_SYS_TOKEN_EMPTY::令牌为空，
+# IM 通道也注册不上（表现为"登录成功了但跑不通"）。
+#
+# mtop 的标准握手就是：第一次请求不带有效 sign -> 服务端返回错误但 set-cookie
+# 下发 `_m_h5_tk` -> 客户端带 token 重算 sign 再请求。这里复刻第一步。
+BOOTSTRAP_TOKEN_JS = r"""
+async (params) => {
+  const api = params.api;
+  const appKey = params.appKey;
+  const t = String(Date.now());
+  const qs = new URLSearchParams({
+    jsv: '2.7.2',
+    appKey: appKey,
+    t: t,
+    sign: 'bootstrap',          // 故意无效：只为触达服务端拿 set-cookie
+    api: api,
+    v: '1.0',
+    type: 'originaljson',
+    dataType: 'json',
+    data: '{}'
+  });
+  let respText = '';
+  try {
+    const r = await fetch('https://h5api.m.goofish.com/h5/' + api + '/1.0/?' + qs.toString(),
+                          { credentials: 'include' });
+    respText = (await r.text()).slice(0, 300);
+  } catch (e) {
+    respText = 'fetch_error: ' + String(e);
+  }
+  const m = document.cookie.match(/(?:^|; )_m_h5_tk=([^;]*)/);
+  return { hasTk: !!m, resp: respText };
+}
+"""
+
+_TOKEN_API = "mtop.taobao.idlemessage.pc.login.token"
+_DEFAULT_APP_KEY = "444e9908a51d1cb236a27862abc769c9"
+
 
 class BrowserQRLogin:
     """一次扫码登录会话。"""
@@ -118,13 +159,18 @@ class BrowserQRLogin:
 
             self.image_b64 = img_b64
             self.status = "waiting"
+            data_url = f"data:image/png;base64,{img_b64}"
             logger.info(f"【{self.cookie_id}】[扫码] 二维码已就绪 (session={self.session_id})")
             return {
                 "success": True,
                 "session_id": self.session_id,
-                "image": f"data:image/png;base64,{img_b64}",
+                # 前端（static/js/app.js: showQRCodeImage(data.qr_code_url)）读的是
+                # qr_code_url，必须保持与原 HTTP 扫码同名，否则前端拿到 undefined。
+                "qr_code_url": data_url,
+                "image": data_url,
                 "status": "waiting",
                 "message": "请使用闲鱼 App 扫码",
+                "engine": "browser",
             }
         except Exception as exc:
             logger.error(f"【{self.cookie_id}】[扫码] 启动异常: {exc}")
@@ -149,10 +195,20 @@ class BrowserQRLogin:
             cookies = await self.session.dump_cookies()
             names = {c.get("name") for c in cookies}
             if "unb" in names and ({"cookie2", "sgcookie", "_tb_token_"} & names):
+                # 登录成功了，但还缺 `_m_h5_tk`：必须先握手拿到它，否则后续
+                # mtop 全报"令牌为空"，IM 通道注册不上。
+                if "_m_h5_tk" not in names:
+                    await self._bootstrap_mtop_token()
+                    cookies = await self.session.dump_cookies()
+                    names = {c.get("name") for c in cookies}
+
                 self.status = "success"
                 self.message = "扫码登录成功"
                 cookies_str = await self.session.cookies_to_string()
-                logger.info(f"【{self.cookie_id}】[扫码] 登录成功")
+                logger.info(
+                    f"【{self.cookie_id}】[扫码] 登录成功"
+                    f"（_m_h5_tk {'已就绪' if '_m_h5_tk' in names else '仍缺失'}）"
+                )
                 await self.cancel()
                 return {
                     "success": True,
@@ -160,6 +216,7 @@ class BrowserQRLogin:
                     "session_id": self.session_id,
                     "message": self.message,
                     "cookies": cookies_str,
+                    "has_m_h5_tk": "_m_h5_tk" in names,
                 }
 
             # 2) 页面状态
@@ -201,6 +258,47 @@ class BrowserQRLogin:
         self._page = None
 
     # ------------------------------------------------------------------ 内部
+
+    async def _bootstrap_mtop_token(self, attempts: int = 3) -> bool:
+        """在页面里握手一次 h5api，让服务端下发 `_m_h5_tk`。
+
+        这是"扫码成功却跑不通"的根因修复点：没有 `_m_h5_tk` 时所有 mtop 调用
+        都会 FAIL_SYS_TOKEN_EMPTY，IM 注册不上。
+        """
+        page = self._page
+        if page is None:
+            return False
+
+        frames: List[Any] = []
+        try:
+            # 优先在 goofish 主域的 frame 里执行（cookie 域匹配才拿得到 set-cookie）
+            frames = [f for f in page.frames if "goofish.com" in (f.url or "")]
+            if not frames:
+                frames = list(page.frames)
+        except Exception:
+            frames = [page.main_frame]
+
+        for attempt in range(1, attempts + 1):
+            for frame in frames:
+                try:
+                    res = await frame.evaluate(
+                        BOOTSTRAP_TOKEN_JS,
+                        {"api": _TOKEN_API, "appKey": _DEFAULT_APP_KEY},
+                    )
+                    if isinstance(res, dict) and res.get("hasTk"):
+                        logger.info(
+                            f"【{self.cookie_id}】[扫码] 已取得 _m_h5_tk（第 {attempt} 次握手）"
+                        )
+                        return True
+                except Exception as exc:
+                    logger.debug(f"【{self.cookie_id}】[扫码] token 握手异常: {exc}")
+            await asyncio.sleep(0.6)
+
+        logger.warning(
+            f"【{self.cookie_id}】[扫码] 未能取得 _m_h5_tk，"
+            f"后续 mtop 可能报「令牌为空」，需要在页面里访问一次 h5api"
+        )
+        return False
 
     async def _capture_qrcode(self) -> str:
         """定位二维码元素并截图返回 base64。"""

@@ -44,78 +44,41 @@ IM_HOME_URLS = (
 )
 
 MTOP_APP_KEY = "444e9908a51d1cb236a27862abc769c9"
+# 注意：淘宝 mtop 的外层 appKey（URL 参数 + 签名）与内层 data 里的 appKey 不同。
+# 项目 utils/xianyu_utils.generate_sign 固定用 34839810 算签名，
+# 而 data JSON 里内嵌 444e9908a51d1cb236a27862abc769c9。搞混会直接
+# 返回 FAIL_SYS_PARAMINVALID_ERROR::请求参数非法。
+MTOP_SIGN_APP_KEY = "34839810"
 IM_TOKEN_API = "mtop.taobao.idlemessage.pc.login.token"
 
-# 从网页里换 IM token：签名与 cookie 全部由页面自身完成，
-# 等价于鱼店长 Pro 的 GetTokenFromWebAsync。
+# 在页面里请求一个**已经拼好签名**的 mtop URL。
+#
+# 关键教训：浏览器 Web Crypto（crypto.subtle.digest）**只支持 SHA-1/256/384/512，
+# 不支持 MD5**。早期版本在页面里用 crypto.subtle.digest('MD5') 算 sign，
+# 直接抛 NotSupportedError，导致 IM token 永远拿不到（表现为"令牌为空"）。
+# 因此 sign 一律在 Python 侧算好（token 从浏览器 cookie 读），页面只负责携带
+# 浏览器自身的 cookie / 指纹把请求发出去。
 TOKEN_FETCH_JS = r"""
 async (params) => {
-  const appKey = params.appKey;
-  const api = params.api;
-  const deviceId = params.deviceId || '';
-
-  function readCookie(name) {
-    const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
-    return m ? decodeURIComponent(m[1]) : '';
-  }
-
-  const tkFull = readCookie('_m_h5_tk');
-  const tk = tkFull ? tkFull.split('_')[0] : '';
-  if (!tk) {
-    return { ok: false, reason: 'no_m_h5_tk', cookies: document.cookie };
-  }
-
-  async function md5Hex(str) {
-    const buf = new TextEncoder().encode(str);
-    const hash = await crypto.subtle.digest('MD5', buf);
-    return Array.from(new Uint8Array(hash))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-  }
-
-  const t = String(Date.now());
-  const dataObj = { appKey: appKey, deviceId: deviceId };
-  const dataStr = JSON.stringify(dataObj);
-  const sign = await md5Hex(tk + '&' + t + '&' + appKey + '&' + dataStr);
-
-  const qs = new URLSearchParams({
-    jsv: '2.7.2',
-    appKey: appKey,
-    t: t,
-    sign: sign,
-    api: api,
-    v: '1.0',
-    type: 'originaljson',
-    dataType: 'json',
-    timeout: '10000',
-    data: dataStr
-  });
-
-  const url = 'https://h5api.m.goofish.com/h5/' + api + '/1.0/?' + qs.toString();
-
   try {
-    const resp = await fetch(url, {
+    const resp = await fetch(params.url, {
       method: 'GET',
       credentials: 'include',
-      headers: {
-        'accept': 'application/json',
-        'cache-control': 'no-cache',
-        'pragma': 'no-cache'
-      }
+      headers: { 'accept': 'application/json' }
     });
     const text = await resp.text();
     let j = null;
     try { j = JSON.parse(text); } catch (e) { j = null; }
+    const data = (j && j.data) ? j.data : null;
     return {
-      ok: !!(j && j.data && j.data.accessToken),
+      ok: !!(data && data.accessToken),
       httpStatus: resp.status,
-      ret: j ? Array.from(j.ret || []) : [],
-      raw: text.slice(0, 4000),
-      token: (j && j.data && j.data.accessToken) ? j.data.accessToken : '',
-      cookies: document.cookie
+      ret: (j && j.ret) ? Array.from(j.ret) : [],
+      token: data ? (data.accessToken || '') : '',
+      raw: text.slice(0, 2000)
     };
   } catch (e) {
-    return { ok: false, reason: 'fetch_failed: ' + String(e), cookies: document.cookie };
+    return { ok: false, reason: 'fetch_failed: ' + String(e) };
   }
 }
 """
@@ -651,13 +614,59 @@ class BrowserIMSession:
         return True
 
     async def get_im_token(self, device_id: str = "") -> Dict[str, Any]:
-        """从网页上下文换 IM accessToken（`GetTokenFromWebAsync` 等价）。"""
-        page = await self._ensure_page()
-        params = {
-            "appKey": MTOP_APP_KEY,
+        """从网页上下文换 IM accessToken（`GetTokenFromWebAsync` 等价）。
+
+        sign 在 Python 侧算（浏览器 Web Crypto 不支持 MD5），页面只负责用自身
+        cookie 与指纹把请求发出去。
+        """
+        # 1) 先确保 `_m_h5_tk` 已下发（扫码后常见缺失）
+        cookies = await self.dump_cookies()
+        tk_full = ""
+        for c in cookies:
+            if c.get("name") == "_m_h5_tk":
+                tk_full = c.get("value") or ""
+                break
+        tk = tk_full.split("_")[0] if tk_full else ""
+        if not tk:
+            return {"ok": False, "reason": "no_m_h5_tk"}
+
+        # 2) Python 侧计算签名（外层 appKey=34839810，内层 data 里是 444e9908...）
+        import hashlib
+        import json as _json
+        import urllib.parse as _up
+
+        data_str = _json.dumps(
+            {"appKey": MTOP_APP_KEY, "deviceId": device_id},
+            separators=(",", ":"),
+        )
+        ts = str(int(time.time() * 1000))
+        sign = hashlib.md5(
+            f"{tk}&{ts}&{MTOP_SIGN_APP_KEY}&{data_str}".encode("utf-8")
+        ).hexdigest()
+
+        query = _up.urlencode({
+            "jsv": "2.7.2",
+            "appKey": MTOP_SIGN_APP_KEY,
+            "t": ts,
+            "sign": sign,
+            "v": "1.0",
+            "type": "originaljson",
+            "accountSite": "xianyu",
+            "dataType": "json",
+            "timeout": "20000",
             "api": IM_TOKEN_API,
-            "deviceId": device_id,
-        }
+            "sessionOption": "AutoLoginOnly",
+            "smToken": "token",
+            "queryToken": "sm",
+            "sm": "sm",
+            "spm_cnt": "a21ybx.im.0.0",
+            "data": data_str,
+        })
+        url = f"https://h5api.m.goofish.com/h5/{IM_TOKEN_API}/1.0/?{query}"
+
+        # 3) 交给页面发出（自带 cookie / UA / 指纹）
+        params = {"url": url}
+        page = await self._ensure_page()
         for frame in page.frames:
             try:
                 res = await frame.evaluate(TOKEN_FETCH_JS, params)
@@ -669,14 +678,21 @@ class BrowserIMSession:
             if res.get("ok") and res.get("token"):
                 logger.info(f"【{self.cookie_id}】从浏览器取得 IM token")
                 return res
-        # 主 frame 再兜底一次
+            last_reason = res.get("ret") or res.get("reason")
+        else:
+            last_reason = "all_frames_failed"
+
         try:
             res = await page.evaluate(TOKEN_FETCH_JS, params)
-            if isinstance(res, dict):
+            if isinstance(res, dict) and res.get("ok") and res.get("token"):
+                logger.info(f"【{self.cookie_id}】从浏览器取得 IM token")
                 return res
+            if isinstance(res, dict):
+                last_reason = res.get("ret") or res.get("reason") or last_reason
         except Exception as exc:
             logger.debug(f"【{self.cookie_id}】token 取用异常(page): {exc}")
-        return {"ok": False, "reason": "all_frames_failed"}
+
+        return {"ok": False, "reason": last_reason or "token_failed"}
 
     # ------------------------------------------------------------------ 诊断
 

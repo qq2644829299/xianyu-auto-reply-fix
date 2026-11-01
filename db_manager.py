@@ -1,4 +1,4 @@
-import sqlite3
+﻿import sqlite3
 import os
 import threading
 import hashlib
@@ -434,9 +434,6 @@ class DBManager:
                 max_discount_amount INTEGER DEFAULT 100,
                 max_bargain_rounds INTEGER DEFAULT 3,
                 custom_prompts TEXT,
-                reply_schedule_mode TEXT DEFAULT 'all_day',
-                reply_start_time TEXT DEFAULT '00:00',
-                reply_end_time TEXT DEFAULT '23:59',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
@@ -629,8 +626,6 @@ class DBManager:
                 item_price TEXT,
                 item_detail TEXT,
                 is_multi_spec BOOLEAN DEFAULT FALSE,
-                delivery_card_id INTEGER,
-                auto_delivery_enabled BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE,
@@ -646,23 +641,6 @@ class DBManager:
                 logger.info("正在为 item_info 表添加 multi_quantity_delivery 列...")
                 self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN multi_quantity_delivery BOOLEAN DEFAULT FALSE")
                 logger.info("item_info 表 multi_quantity_delivery 列添加完成")
-
-            # 商品直接绑定的自动发货卡券。保留旧的关键词规则，供已配置的商品继续使用。
-            try:
-                self._execute_sql(cursor, "SELECT delivery_card_id FROM item_info LIMIT 1")
-            except sqlite3.OperationalError:
-                logger.info("正在为 item_info 表添加 delivery_card_id 列...")
-                self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN delivery_card_id INTEGER")
-                logger.info("item_info 表 delivery_card_id 列添加完成")
-
-            # 自动发货是否在商品维度启用。旧数据中已经绑定卡券的商品保持原有可发货行为。
-            try:
-                self._execute_sql(cursor, "SELECT auto_delivery_enabled FROM item_info LIMIT 1")
-            except sqlite3.OperationalError:
-                logger.info("正在为 item_info 表添加 auto_delivery_enabled 列...")
-                self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN auto_delivery_enabled BOOLEAN DEFAULT FALSE")
-                self._execute_sql(cursor, "UPDATE item_info SET auto_delivery_enabled = TRUE WHERE delivery_card_id IS NOT NULL")
-                logger.info("item_info 表 auto_delivery_enabled 列添加完成")
 
             # 创建自动发货规则表
             cursor.execute('''
@@ -842,66 +820,6 @@ class DBManager:
             )
             ''')
 
-            # 平台计费：AI 回复按额度、自动发货按周期授权。两类卡密分表避免与商品发货卡券混淆。
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_ai_credits (
-                user_id INTEGER PRIMARY KEY,
-                balance INTEGER NOT NULL DEFAULT 0,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            ''')
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS ai_usage_ledger (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                cookie_id TEXT NOT NULL,
-                chat_id TEXT NOT NULL,
-                reference_id TEXT NOT NULL UNIQUE,
-                delta INTEGER NOT NULL,
-                balance_after INTEGER NOT NULL,
-                note TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            ''')
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS activation_codes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                product_type TEXT NOT NULL CHECK(product_type IN ('ai_credit','auto_delivery')),
-                amount INTEGER NOT NULL DEFAULT 0,
-                duration_days INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','used','void')),
-                used_by INTEGER,
-                used_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
-            )
-            ''')
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_feature_subscriptions (
-                user_id INTEGER NOT NULL,
-                feature TEXT NOT NULL,
-                expires_at TIMESTAMP NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, feature),
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            ''')
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS registration_audit (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ip_address TEXT NOT NULL,
-                user_id INTEGER NOT NULL,
-                username TEXT NOT NULL,
-                email TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-            ''')
-            self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_registration_audit_ip_created ON registration_audit(ip_address, created_at)")
-
             # 创建消息通知配置表
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS message_notifications (
@@ -1076,8 +994,6 @@ Cookie数量: {cookie_count}
             ('registration_enabled', 'true', '是否开启用户注册'),
             ('show_default_login_info', 'true', '是否显示默认登录信息'),
             ('login_captcha_enabled', 'true', '是否开启登录验证码'),
-            ('registration_gift_ai_credits', '500', '新用户注册赠送 AI 回复次数'),
-            ('registration_gift_auto_delivery_days', '30', '新用户注册赠送自动发货授权天数'),
             ('risk_control_night_mode_enabled', 'false', '是否启用夜间风控降频'),
             ('risk_control_night_start_hour', '1', '夜间风控降频开始小时'),
             ('risk_control_night_end_hour', '6', '夜间风控降频结束小时'),
@@ -1177,14 +1093,6 @@ Cookie数量: {cookie_count}
                 logger.info("添加ai_reply_settings表的api_type列...")
                 cursor.execute("ALTER TABLE ai_reply_settings ADD COLUMN api_type TEXT DEFAULT ''")
                 logger.info("数据库迁移完成：添加api_type列")
-            for column, definition in {
-                'reply_schedule_mode': "TEXT DEFAULT 'all_day'",
-                'reply_start_time': "TEXT DEFAULT '00:00'",
-                'reply_end_time': "TEXT DEFAULT '23:59'",
-            }.items():
-                if column not in ai_columns:
-                    cursor.execute(f"ALTER TABLE ai_reply_settings ADD COLUMN {column} {definition}")
-                    logger.info(f"数据库迁移完成：添加ai_reply_settings.{column}列")
 
             # 检查ai_config_presets表是否存在api_type列
             cursor.execute("PRAGMA table_info(ai_config_presets)")
@@ -1768,12 +1676,6 @@ Cookie数量: {cookie_count}
                     # 多数量发货字段不存在，需要添加
                     self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN multi_quantity_delivery BOOLEAN DEFAULT FALSE")
                     logger.info("为item_info表添加多数量发货字段")
-
-                try:
-                    self._execute_sql(cursor, "SELECT delivery_card_id FROM item_info LIMIT 1")
-                except sqlite3.OperationalError:
-                    self._execute_sql(cursor, "ALTER TABLE item_info ADD COLUMN delivery_card_id INTEGER")
-                    logger.info("为item_info表添加自动发货卡券绑定字段")
 
                 # 处理keywords表的唯一约束问题
                 # 由于SQLite不支持直接修改约束，我们需要重建表
@@ -2413,6 +2315,20 @@ Cookie数量: {cookie_count}
                 return {}
 
 
+
+    def is_admin_user(self, user_id: int) -> bool:
+        """判断用户是否为管理员。
+
+        reply_server 的 AI 回复设置等接口会调用它；此前 db_manager 里没有这个方法，
+        导致面板打开 AI 设置时报 'DBManager' object has no attribute 'is_admin_user'（500）。
+        """
+        try:
+            cursor = self.conn.cursor()
+            self._execute_sql(cursor, "SELECT is_admin FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            return bool(row and row[0])
+        except Exception:
+            return False
 
     def get_cookie_by_id(self, cookie_id: str) -> Optional[Dict[str, str]]:
         """根据ID获取Cookie信息
@@ -3327,8 +3243,8 @@ Cookie数量: {cookie_count}
                 INSERT OR REPLACE INTO ai_reply_settings
                 (cookie_id, ai_enabled, model_name, api_key, base_url, api_type,
                  max_discount_percent, max_discount_amount, max_bargain_rounds,
-                 custom_prompts, reply_schedule_mode, reply_start_time, reply_end_time, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                 custom_prompts, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ''', (
                     cookie_id,
                     settings.get('ai_enabled', False),
@@ -3339,10 +3255,7 @@ Cookie数量: {cookie_count}
                     settings.get('max_discount_percent', 10),
                     settings.get('max_discount_amount', 100),
                     settings.get('max_bargain_rounds', 3),
-                    settings.get('custom_prompts', ''),
-                    settings.get('reply_schedule_mode', 'all_day'),
-                    settings.get('reply_start_time', '00:00'),
-                    settings.get('reply_end_time', '23:59')
+                    settings.get('custom_prompts', '')
                 ))
                 self.conn.commit()
                 logger.debug(f"AI回复设置保存成功: {cookie_id}")
@@ -3360,7 +3273,7 @@ Cookie数量: {cookie_count}
                 cursor.execute('''
                 SELECT ai_enabled, model_name, api_key, base_url, api_type,
                        max_discount_percent, max_discount_amount, max_bargain_rounds,
-                       custom_prompts, reply_schedule_mode, reply_start_time, reply_end_time
+                       custom_prompts
                 FROM ai_reply_settings WHERE cookie_id = ?
                 ''', (cookie_id,))
 
@@ -3375,10 +3288,7 @@ Cookie数量: {cookie_count}
                         'max_discount_percent': result[5],
                         'max_discount_amount': result[6],
                         'max_bargain_rounds': result[7],
-                        'custom_prompts': result[8],
-                        'reply_schedule_mode': result[9] or 'all_day',
-                        'reply_start_time': result[10] or '00:00',
-                        'reply_end_time': result[11] or '23:59'
+                        'custom_prompts': result[8]
                     }
                 else:
                     # 返回默认设置
@@ -3391,10 +3301,7 @@ Cookie数量: {cookie_count}
                         'max_discount_percent': 10,
                         'max_discount_amount': 100,
                         'max_bargain_rounds': 3,
-                        'custom_prompts': '',
-                        'reply_schedule_mode': 'all_day',
-                        'reply_start_time': '00:00',
-                        'reply_end_time': '23:59'
+                        'custom_prompts': ''
                     }
             except Exception as e:
                 logger.error(f"获取AI回复设置失败: {e}")
@@ -3407,10 +3314,7 @@ Cookie数量: {cookie_count}
                     'max_discount_percent': 10,
                     'max_discount_amount': 100,
                     'max_bargain_rounds': 3,
-                    'custom_prompts': '',
-                    'reply_schedule_mode': 'all_day',
-                    'reply_start_time': '00:00',
-                    'reply_end_time': '23:59'
+                    'custom_prompts': ''
                 }
 
     def get_all_ai_reply_settings(self) -> Dict[str, dict]:
@@ -3421,7 +3325,7 @@ Cookie数量: {cookie_count}
                 cursor.execute('''
                 SELECT cookie_id, ai_enabled, model_name, api_key, base_url, api_type,
                        max_discount_percent, max_discount_amount, max_bargain_rounds,
-                       custom_prompts, reply_schedule_mode, reply_start_time, reply_end_time
+                       custom_prompts
                 FROM ai_reply_settings
                 ''')
 
@@ -3437,10 +3341,7 @@ Cookie数量: {cookie_count}
                         'max_discount_percent': row[6],
                         'max_discount_amount': row[7],
                         'max_bargain_rounds': row[8],
-                        'custom_prompts': row[9],
-                        'reply_schedule_mode': row[10] or 'all_day',
-                        'reply_start_time': row[11] or '00:00',
-                        'reply_end_time': row[12] or '23:59'
+                        'custom_prompts': row[9]
                     }
 
                 return result
@@ -4311,132 +4212,6 @@ Cookie数量: {cookie_count}
                 logger.error(f"获取所有系统设置失败: {e}")
                 return {}
 
-    # -------------------- 平台额度与授权卡密 --------------------
-    def get_cookie_owner_id(self, cookie_id: str) -> Optional[int]:
-        with self.lock:
-            cursor = self.conn.cursor()
-            self._execute_sql(cursor, 'SELECT user_id FROM cookies WHERE id = ?', (cookie_id,))
-            row = cursor.fetchone()
-            return int(row[0]) if row else None
-
-    def is_admin_user(self, user_id: int) -> bool:
-        with self.lock:
-            try:
-                cursor = self.conn.cursor()
-                self._execute_sql(cursor, 'SELECT is_admin FROM users WHERE id = ?', (user_id,))
-                row = cursor.fetchone()
-                return bool(row and row[0])
-            except Exception:
-                return False
-
-    def get_ai_credit_balance(self, user_id: int) -> int:
-        with self.lock:
-            cursor = self.conn.cursor()
-            self._execute_sql(cursor, 'SELECT balance FROM user_ai_credits WHERE user_id = ?', (user_id,))
-            row = cursor.fetchone()
-            return int(row[0]) if row else 0
-
-    def consume_ai_credit(self, user_id: int, cookie_id: str, chat_id: str, reference_id: str) -> bool:
-        """成功生成一条 AI 回复后扣 1 次；reference_id 唯一，重复处理不会重复扣费。"""
-        with self.lock:
-            try:
-                if self.is_admin_user(user_id):
-                    return True
-                cursor = self.conn.cursor()
-                self._execute_sql(cursor, 'SELECT id FROM ai_usage_ledger WHERE reference_id = ?', (reference_id,))
-                if cursor.fetchone():
-                    return True
-                self._execute_sql(cursor, 'INSERT OR IGNORE INTO user_ai_credits(user_id, balance) VALUES (?, 0)', (user_id,))
-                self._execute_sql(cursor, 'SELECT balance FROM user_ai_credits WHERE user_id = ?', (user_id,))
-                balance = int(cursor.fetchone()[0])
-                if balance <= 0:
-                    return False
-                new_balance = balance - 1
-                self._execute_sql(cursor, 'UPDATE user_ai_credits SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE user_id=?', (new_balance, user_id))
-                self._execute_sql(cursor, '''INSERT INTO ai_usage_ledger
-                    (user_id,cookie_id,chat_id,reference_id,delta,balance_after,note)
-                    VALUES (?,?,?,?,?,?,?)''', (user_id, cookie_id, chat_id, reference_id, -1, new_balance, 'AI 回复成功'))
-                self.conn.commit()
-                return True
-            except Exception as e:
-                logger.error(f'扣减 AI 额度失败: {e}')
-                self.conn.rollback()
-                return False
-
-    def create_activation_codes(self, product_type: str, amount: int, duration_days: int, count: int) -> List[str]:
-        import secrets
-        if product_type not in ('ai_credit', 'auto_delivery'):
-            raise ValueError('不支持的卡密类型')
-        codes = []
-        with self.lock:
-            cursor = self.conn.cursor()
-            for _ in range(max(1, min(int(count), 1000))):
-                code = 'YZ-' + secrets.token_urlsafe(12).upper().replace('_', '').replace('-', '')
-                self._execute_sql(cursor, 'INSERT INTO activation_codes(code,product_type,amount,duration_days) VALUES (?,?,?,?)', (code, product_type, int(amount), int(duration_days)))
-                codes.append(code)
-            self.conn.commit()
-        return codes
-
-    def redeem_activation_code(self, user_id: int, code: str) -> Dict[str, Any]:
-        with self.lock:
-            try:
-                cursor = self.conn.cursor()
-                self._execute_sql(cursor, 'SELECT id,product_type,amount,duration_days,status FROM activation_codes WHERE code=?', (code.strip().upper(),))
-                row = cursor.fetchone()
-                if not row or row[4] != 'active':
-                    return {'success': False, 'message': '卡密无效、已使用或已作废'}
-                card_id, product_type, amount, duration_days, _ = row
-                if product_type == 'ai_credit':
-                    self._execute_sql(cursor, 'INSERT OR IGNORE INTO user_ai_credits(user_id,balance) VALUES (?,0)', (user_id,))
-                    self._execute_sql(cursor, 'UPDATE user_ai_credits SET balance=balance+?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?', (amount, user_id))
-                    self._execute_sql(cursor, 'SELECT balance FROM user_ai_credits WHERE user_id=?', (user_id,))
-                    balance = int(cursor.fetchone()[0])
-                    self._execute_sql(cursor, 'INSERT INTO ai_usage_ledger(user_id,cookie_id,chat_id,reference_id,delta,balance_after,note) VALUES (?,?,?,?,?,?,?)', (user_id, '', '', f'redeem:{card_id}', amount, balance, '卡密兑换额度'))
-                    message = f'兑换成功，已增加 {amount} 次 AI 回复额度'
-                else:
-                    self._execute_sql(cursor, 'SELECT expires_at FROM user_feature_subscriptions WHERE user_id=? AND feature=?', (user_id, 'auto_delivery'))
-                    old = cursor.fetchone()
-                    base = datetime.now()
-                    if old and old[0]:
-                        try:
-                            old_time = datetime.fromisoformat(str(old[0]).replace('Z', '+00:00')).replace(tzinfo=None)
-                            if old_time > base:
-                                base = old_time
-                        except ValueError:
-                            pass
-                    expires = base + timedelta(days=max(1, int(duration_days)))
-                    self._execute_sql(cursor, '''INSERT OR REPLACE INTO user_feature_subscriptions(user_id,feature,expires_at,updated_at)
-                        VALUES (?,?,?,CURRENT_TIMESTAMP)''', (user_id, 'auto_delivery', expires.strftime('%Y-%m-%d %H:%M:%S')))
-                    message = f'兑换成功，自动发货已授权至 {expires.strftime("%Y-%m-%d %H:%M:%S")}'
-                self._execute_sql(cursor, 'UPDATE activation_codes SET status=?,used_by=?,used_at=CURRENT_TIMESTAMP WHERE id=?', ('used', user_id, card_id))
-                self.conn.commit()
-                return {
-                    'success': True,
-                    'message': message,
-                    'ai_balance': self.get_ai_credit_balance(user_id),
-                    'product_type': product_type,
-                    'amount': int(amount or 0),
-                }
-            except Exception as e:
-                logger.error(f'兑换卡密失败: {e}')
-                self.conn.rollback()
-                return {'success': False, 'message': '兑换失败，请稍后重试'}
-
-    def has_active_feature_subscription(self, user_id: int, feature: str) -> bool:
-        """管理员可无限使用；普通租户必须有未到期的功能授权。"""
-        if self.is_admin_user(user_id):
-            return True
-        with self.lock:
-            cursor = self.conn.cursor()
-            self._execute_sql(cursor, 'SELECT expires_at FROM user_feature_subscriptions WHERE user_id=? AND feature=?', (user_id, feature))
-            row = cursor.fetchone()
-            if not row or not row[0]:
-                return False
-            try:
-                return datetime.fromisoformat(str(row[0]).replace('Z', '+00:00')).replace(tzinfo=None) > datetime.now()
-            except ValueError:
-                return False
-
     # 管理员密码现在统一使用用户表管理，不再需要单独的方法
 
     # ==================== 用户管理方法 ====================
@@ -4462,83 +4237,6 @@ Cookie数量: {cookie_count}
                 return False
             except Exception as e:
                 logger.error(f"创建用户失败: {e}")
-                self.conn.rollback()
-                return False
-
-    def can_register_from_ip(self, ip_address: str, days: int = 30) -> bool:
-        """同一公网 IP 在指定周期内只能成功注册一次。"""
-        with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                SELECT 1 FROM registration_audit
-                WHERE ip_address = ? AND created_at >= datetime('now', ?)
-                LIMIT 1
-            ''', (ip_address, f'-{max(1, int(days))} days'))
-            return cursor.fetchone() is None
-
-    def record_registration(self, ip_address: str, user_id: int, username: str, email: str) -> bool:
-        with self.lock:
-            try:
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    INSERT INTO registration_audit (ip_address, user_id, username, email)
-                    VALUES (?, ?, ?, ?)
-                ''', (ip_address, user_id, username, email))
-                self.conn.commit()
-                return True
-            except Exception as e:
-                logger.error(f"记录注册审计失败: {e}")
-                self.conn.rollback()
-                return False
-
-    def get_registration_gift_settings(self) -> Dict[str, int]:
-        """返回新用户注册赠送配置；旧数据库缺少配置时沿用原有默认值。"""
-        def _value(key: str, default: int, maximum: int) -> int:
-            try:
-                return max(0, min(int(self.get_system_setting(key) or default), maximum))
-            except (TypeError, ValueError):
-                return default
-
-        return {
-            'ai_credits': _value('registration_gift_ai_credits', 500, 100000),
-            'auto_delivery_days': _value('registration_gift_auto_delivery_days', 30, 3650),
-        }
-
-    def grant_registration_gift(self, user_id: int) -> bool:
-        """按管理员配置一次性赠送新用户 AI 额度和自动发货授权。"""
-        reference_id = f'registration-gift:{user_id}'
-        gift = self.get_registration_gift_settings()
-        ai_credits = gift['ai_credits']
-        delivery_days = gift['auto_delivery_days']
-        with self.lock:
-            try:
-                cursor = self.conn.cursor()
-                cursor.execute('SELECT 1 FROM ai_usage_ledger WHERE reference_id = ?', (reference_id,))
-                if cursor.fetchone():
-                    return True
-                cursor.execute('INSERT OR IGNORE INTO user_ai_credits (user_id, balance) VALUES (?, 0)', (user_id,))
-                cursor.execute('UPDATE user_ai_credits SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?', (ai_credits, user_id))
-                cursor.execute('SELECT balance FROM user_ai_credits WHERE user_id = ?', (user_id,))
-                balance = cursor.fetchone()[0]
-                cursor.execute('''
-                    INSERT INTO ai_usage_ledger (user_id, cookie_id, chat_id, reference_id, delta, balance_after, note)
-                    VALUES (?, '', '', ?, ?, ?, '新用户注册赠送')
-                ''', (user_id, reference_id, ai_credits, balance))
-                if delivery_days > 0:
-                    interval = f'+{delivery_days} days'
-                    cursor.execute('''
-                        INSERT INTO user_feature_subscriptions (user_id, feature, expires_at, updated_at)
-                        VALUES (?, 'auto_delivery', datetime('now', ?), CURRENT_TIMESTAMP)
-                        ON CONFLICT(user_id, feature) DO UPDATE SET
-                          expires_at = CASE WHEN user_feature_subscriptions.expires_at > datetime('now')
-                              THEN datetime(user_feature_subscriptions.expires_at, ?)
-                              ELSE datetime('now', ?) END,
-                          updated_at = CURRENT_TIMESTAMP
-                    ''', (user_id, interval, interval, interval))
-                self.conn.commit()
-                return True
-            except Exception as e:
-                logger.error(f"发放注册赠送失败: {e}")
                 self.conn.rollback()
                 return False
 
@@ -4831,16 +4529,16 @@ Cookie数量: {cookie_count}
                 logger.error(f"验证邮箱验证码失败: {e}")
                 return False
 
-    async def send_verification_email(self, email: str, code: str, code_type: str = 'register') -> bool:
-        """发送验证码邮件（优先使用腾讯云 SES API，避免个人账号 SMTP 不可用问题）。"""
+    async def send_verification_email(self, email: str, code: str) -> bool:
+        """发送验证码邮件（支持SMTP和API两种方式）"""
         try:
-            subject = "鱼智云 - 邮箱验证码"
+            subject = "闲鱼管理系统 - 邮箱验证码"
             # 使用简单的纯文本邮件内容
-            text_content = f"""【鱼智云】邮箱验证码
+            text_content = f"""【闲鱼管理系统】邮箱验证码
 
 您好！
 
-感谢您使用鱼智云。为了确保账户安全，请使用以下验证码完成邮箱验证：
+感谢您使用闲鱼管理系统。为了确保账户安全，请使用以下验证码完成邮箱验证：
 
 验证码：{code}
 
@@ -4850,14 +4548,11 @@ Cookie数量: {cookie_count}
 • 如非本人操作，请忽略此邮件
 • 系统不会主动索要您的验证码
 
-感谢您选择鱼智云！
+感谢您选择闲鱼管理系统！
 
 ---
 此邮件由系统自动发送，请勿直接回复
-© 2026 鱼智云"""
-
-            if os.getenv('TENCENTCLOUD_SECRET_ID') and os.getenv('TENCENTCLOUD_SECRET_KEY'):
-                return await self._send_email_via_tencent_ses(email, subject, text_content, code, code_type)
+© 2026 闲鱼管理系统"""
 
             # 从系统设置读取SMTP配置
             try:
@@ -4887,156 +4582,6 @@ Cookie数量: {cookie_count}
 
         except Exception as e:
             logger.error(f"发送验证码邮件异常: {e}")
-            return False
-
-    async def _send_email_via_tencent_ses(self, email: str, subject: str, text_content: str, code: str, code_type: str) -> bool:
-        """通过腾讯云 SES API 发送，凭证只从服务端环境变量读取。"""
-        try:
-            from tencentcloud.common import credential
-            from tencentcloud.common.profile.client_profile import ClientProfile
-            from tencentcloud.common.profile.http_profile import HttpProfile
-            from tencentcloud.ses.v20201002 import ses_client, models
-
-            secret_id = os.environ['TENCENTCLOUD_SECRET_ID']
-            secret_key = os.environ['TENCENTCLOUD_SECRET_KEY']
-            sender = os.getenv('SES_FROM_EMAIL', '').strip()
-            region = os.getenv('TENCENTCLOUD_SES_REGION', 'ap-hongkong').strip()
-            if not sender:
-                logger.error('腾讯云 SES 未配置 SES_FROM_EMAIL')
-                return False
-
-            cred = credential.Credential(secret_id, secret_key)
-            http_profile = HttpProfile()
-            http_profile.endpoint = 'ses.tencentcloudapi.com'
-            client = ses_client.SesClient(cred, region, ClientProfile(httpProfile=http_profile))
-            request = models.SendEmailRequest()
-            request.FromEmailAddress = sender
-            request.Destination = [email]
-            request.Subject = subject
-            template_env_keys = {
-                'register': 'SES_TEMPLATE_REGISTER_ID',
-                'login': 'SES_TEMPLATE_LOGIN_ID',
-                'reset_password': 'SES_TEMPLATE_RESET_ID',
-            }
-            template_id = os.getenv(template_env_keys.get(code_type, 'SES_TEMPLATE_REGISTER_ID'), '') or os.getenv('SES_TEMPLATE_REGISTER_ID', '')
-            if not template_id:
-                logger.error('腾讯云 SES 未配置验证码模板 ID')
-                return False
-            # 个人实名账号仅允许模板发送；模板内请使用变量 {{code}}。
-            request.Template = {
-                'TemplateID': int(template_id),
-                'TemplateData': json.dumps({'code': str(code)}, ensure_ascii=False),
-            }
-            response = client.SendEmail(request)
-            logger.info(f'验证码邮件发送成功(腾讯云SES): {email}, request_id={response.RequestId}')
-            return True
-        except Exception as e:
-            logger.error(f'腾讯云 SES 发送验证码邮件失败: {e}')
-            return False
-
-    async def send_platform_account_alert(self, cookie_id: str, *, email_override: str = None) -> bool:
-        """用平台 SES 向账号所属用户发送登录/Cookie 异常提醒。
-
-        账号异常提醒属于自动发货的保障通知：只有自动发货权益仍有效的
-        账号所属用户才接收，管理员继续沿用其无限权益。
-        """
-        try:
-            user_id = self.get_cookie_owner_id(cookie_id) if cookie_id else None
-            if not user_id:
-                logger.info(f'账号 {cookie_id} 未关联用户，跳过平台异常提醒')
-                return False
-            if not self.has_active_feature_subscription(user_id, 'auto_delivery'):
-                logger.info(f'账号 {cookie_id} 所属用户未开通或已到期自动发货，跳过平台异常提醒')
-                return False
-            user = self.get_user_by_id(user_id) if user_id else None
-            email = str(email_override or (user or {}).get('email') or '').strip()
-            username = str((user or {}).get('username') or '鱼智云用户').strip()
-            if not email:
-                logger.warning(f'账号 {cookie_id} 未绑定可用邮箱，无法发送平台异常提醒')
-                return False
-
-            from tencentcloud.common import credential
-            from tencentcloud.common.profile.client_profile import ClientProfile
-            from tencentcloud.common.profile.http_profile import HttpProfile
-            from tencentcloud.ses.v20201002 import ses_client, models
-
-            secret_id = os.environ['TENCENTCLOUD_SECRET_ID']
-            secret_key = os.environ['TENCENTCLOUD_SECRET_KEY']
-            sender = os.getenv('SES_FROM_EMAIL', '').strip()
-            region = os.getenv('TENCENTCLOUD_SES_REGION', 'ap-hongkong').strip()
-            template_id = int(os.getenv('SES_TEMPLATE_COOKIE_INVALID_ID', '211660'))
-            if not sender:
-                logger.error('腾讯云 SES 未配置 SES_FROM_EMAIL')
-                return False
-
-            http_profile = HttpProfile()
-            http_profile.endpoint = 'ses.tencentcloudapi.com'
-            client = ses_client.SesClient(
-                credential.Credential(secret_id, secret_key),
-                region,
-                ClientProfile(httpProfile=http_profile),
-            )
-            request = models.SendEmailRequest()
-            request.FromEmailAddress = sender
-            request.Destination = [email]
-            request.Subject = '鱼智云 - 闲鱼账号登录失效提醒'
-            request.Template = {
-                'TemplateID': template_id,
-                'TemplateData': json.dumps({
-                    'username': username,
-                    'account_name': str(cookie_id or '闲鱼账号'),
-                }, ensure_ascii=False),
-            }
-            response = client.SendEmail(request)
-            logger.info(f'平台账号异常邮件发送成功: account={cookie_id}, request_id={response.RequestId}')
-            return True
-        except Exception as e:
-            logger.error(f'平台账号异常邮件发送失败: account={cookie_id}, error={e}')
-            return False
-
-    async def send_platform_quota_email(self, user_id: int, event_type: str, *, calls: int = 0,
-                                        remaining_calls: int = 0) -> bool:
-        """发送 AI 额度到账或额度不足模板邮件。"""
-        try:
-            user = self.get_user_by_id(user_id) or {}
-            email = str(user.get('email') or '').strip()
-            username = str(user.get('username') or '鱼智云用户').strip()
-            if not email:
-                return False
-            template_env = {
-                'credited': ('SES_TEMPLATE_QUOTA_CREDITED_ID', '211658'),
-                'insufficient': ('SES_TEMPLATE_QUOTA_INSUFFICIENT_ID', '211659'),
-            }
-            if event_type not in template_env:
-                return False
-            env_name, default_id = template_env[event_type]
-            from tencentcloud.common import credential
-            from tencentcloud.common.profile.client_profile import ClientProfile
-            from tencentcloud.common.profile.http_profile import HttpProfile
-            from tencentcloud.ses.v20201002 import ses_client, models
-            http_profile = HttpProfile()
-            http_profile.endpoint = 'ses.tencentcloudapi.com'
-            client = ses_client.SesClient(
-                credential.Credential(os.environ['TENCENTCLOUD_SECRET_ID'], os.environ['TENCENTCLOUD_SECRET_KEY']),
-                os.getenv('TENCENTCLOUD_SES_REGION', 'ap-hongkong'),
-                ClientProfile(httpProfile=http_profile),
-            )
-            request = models.SendEmailRequest()
-            request.FromEmailAddress = os.environ['SES_FROM_EMAIL']
-            request.Destination = [email]
-            request.Subject = '鱼智云 - AI 回复额度通知'
-            template_data = {'username': username, 'remaining_calls': str(max(0, int(remaining_calls)))}
-            if event_type == 'credited':
-                template_data['calls'] = str(max(0, int(calls)))
-            request.Template = {
-                'TemplateID': int(os.getenv(env_name, default_id)),
-                'TemplateData': json.dumps(template_data, ensure_ascii=False),
-            }
-            response = client.SendEmail(request)
-            logger.info(f'AI额度邮件发送成功: user_id={user_id}, event={event_type}, request_id={response.RequestId}')
-            return True
-        except Exception as e:
-            logger.error(f'AI额度邮件发送失败: user_id={user_id}, event={event_type}, error={e}')
             return False
 
     async def _send_email_via_smtp(self, email: str, subject: str, text_content: str,
@@ -5298,33 +4843,6 @@ Cookie数量: {cookie_count}
                 return None
             except Exception as e:
                 logger.error(f"获取卡券失败: {e}")
-                return None
-
-    def find_existing_card(self, name: str, is_multi_spec: bool = False,
-                           spec_name: str = None, spec_value: str = None,
-                           user_id: int = None):
-        """按创建时的唯一规则查找已有卡券，用于把重复提交恢复为已有卡券绑定。"""
-        with self.lock:
-            try:
-                cursor = self.conn.cursor()
-                if is_multi_spec:
-                    cursor.execute('''
-                        SELECT id FROM cards
-                        WHERE name = ? AND is_multi_spec = 1
-                          AND spec_name = ? AND spec_value = ? AND user_id = ?
-                        ORDER BY id DESC LIMIT 1
-                    ''', (name, spec_name, spec_value, user_id))
-                else:
-                    cursor.execute('''
-                        SELECT id FROM cards
-                        WHERE name = ? AND (is_multi_spec = 0 OR is_multi_spec IS NULL)
-                          AND user_id = ?
-                        ORDER BY id DESC LIMIT 1
-                    ''', (name, user_id))
-                row = cursor.fetchone()
-                return self.get_card_by_id(int(row[0]), user_id) if row else None
-            except Exception as e:
-                logger.error(f"查找已有卡券失败: {e}")
                 return None
 
     def update_card(self, card_id: int, name: str = None, card_type: str = None,
@@ -6944,67 +6462,6 @@ Cookie数量: {cookie_count}
             logger.error(f"获取商品多数量发货状态失败: {e}")
             return False
 
-    def update_item_delivery_card(self, cookie_id: str, item_id: str, card_id: Optional[int]) -> bool:
-        """绑定或解除商品的自动发货卡券。"""
-        try:
-            with self.lock:
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                UPDATE item_info
-                SET delivery_card_id = ?,
-                    auto_delivery_enabled = CASE WHEN ? IS NULL THEN auto_delivery_enabled ELSE TRUE END,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE cookie_id = ? AND item_id = ?
-                ''', (card_id, card_id, cookie_id, item_id))
-                if cursor.rowcount <= 0:
-                    return False
-                self.conn.commit()
-                logger.info(f"更新商品自动发货卡券成功: {item_id} -> {card_id}")
-                return True
-        except Exception as e:
-            logger.error(f"更新商品自动发货卡券失败: {e}")
-            self.conn.rollback()
-            return False
-
-    def update_item_auto_delivery_enabled(self, cookie_id: str, item_id: str, enabled: bool) -> bool:
-        """启用或移出本地商品的自动发货列表，不会修改闲鱼商品。"""
-        try:
-            with self.lock:
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    UPDATE item_info
-                    SET auto_delivery_enabled = ?,
-                        delivery_card_id = CASE WHEN ? THEN delivery_card_id ELSE NULL END,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE cookie_id = ? AND item_id = ?
-                ''', (bool(enabled), bool(enabled), cookie_id, item_id))
-                if cursor.rowcount <= 0:
-                    return False
-                self.conn.commit()
-                logger.info(f"更新商品自动发货状态成功: {item_id} -> {bool(enabled)}")
-                return True
-        except Exception as e:
-            logger.error(f"更新商品自动发货状态失败: {e}")
-            self.conn.rollback()
-            return False
-
-    def get_item_delivery_card(self, cookie_id: str, item_id: str, user_id: int = None) -> Optional[Dict]:
-        """返回商品已绑定且归属当前用户的卡券，未绑定时返回 None。"""
-        try:
-            with self.lock:
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                SELECT delivery_card_id FROM item_info
-                WHERE cookie_id = ? AND item_id = ?
-                ''', (cookie_id, item_id))
-                row = cursor.fetchone()
-                if not row or row[0] is None:
-                    return None
-                return self.get_card_by_id(int(row[0]), user_id=user_id)
-        except Exception as e:
-            logger.error(f"获取商品绑定卡券失败: {e}")
-            return None
-
     def get_items_by_cookie(self, cookie_id: str) -> List[Dict]:
         """获取指定Cookie的所有商品信息
 
@@ -7042,87 +6499,6 @@ Cookie数量: {cookie_count}
 
         except Exception as e:
             logger.error(f"获取Cookie商品信息失败: {e}")
-            return []
-
-    def count_items_by_cookies(self, cookie_ids: Optional[List[str]] = None) -> int:
-        """轻量统计指定账号的商品数量，不读取商品详情大字段。"""
-        normalized_cookie_ids = [
-            str(value).strip() for value in (cookie_ids or []) if str(value).strip()
-        ]
-        if cookie_ids is not None and not normalized_cookie_ids:
-            return 0
-
-        try:
-            with self.lock:
-                cursor = self.conn.cursor()
-                if normalized_cookie_ids:
-                    placeholders = ", ".join("?" for _ in normalized_cookie_ids)
-                    cursor.execute(
-                        f"SELECT COUNT(*) FROM item_info WHERE cookie_id IN ({placeholders})",
-                        normalized_cookie_ids,
-                    )
-                else:
-                    cursor.execute("SELECT COUNT(*) FROM item_info")
-                row = cursor.fetchone()
-                return int(row[0] or 0) if row else 0
-        except Exception as e:
-            logger.error(f"统计商品数量失败: {e}")
-            return 0
-
-    def get_items_with_delivery_cards(self, cookie_ids: Optional[List[str]] = None,
-                                      user_id: Optional[int] = None) -> List[Dict]:
-        """批量读取商品及其绑定卡券，避免页面逐商品查询卡券。
-
-        ``delivery_card_id`` 是本地自动发货资料的一部分。为了保持租户隔离，传入
-        ``user_id`` 时只关联该用户自己的卡券；已删除或不属于该用户的卡券会以未绑定
-        的状态返回。
-        """
-        normalized_cookie_ids = [str(value).strip() for value in (cookie_ids or []) if str(value).strip()]
-        if cookie_ids is not None and not normalized_cookie_ids:
-            return []
-
-        try:
-            with self.lock:
-                cursor = self.conn.cursor()
-                card_join = "LEFT JOIN cards AS c ON c.id = i.delivery_card_id"
-                params: List[Any] = []
-                if user_id is not None:
-                    card_join += " AND c.user_id = ?"
-                    params.append(user_id)
-
-                where_clause = ""
-                if normalized_cookie_ids:
-                    placeholders = ", ".join("?" for _ in normalized_cookie_ids)
-                    where_clause = f"WHERE i.cookie_id IN ({placeholders})"
-                    params.extend(normalized_cookie_ids)
-
-                cursor.execute(f'''
-                    SELECT i.*, c.name AS _delivery_card_name,
-                           c.enabled AS _delivery_card_enabled
-                    FROM item_info AS i
-                    {card_join}
-                    {where_clause}
-                    ORDER BY i.updated_at DESC
-                ''', params)
-
-                columns = [description[0] for description in cursor.description]
-                items: List[Dict] = []
-                for row in cursor.fetchall():
-                    item_info = dict(zip(columns, row))
-                    card_name = item_info.pop('_delivery_card_name', None)
-                    card_enabled = item_info.pop('_delivery_card_enabled', None)
-                    item_info['delivery_card_name'] = card_name
-                    item_info['delivery_card_enabled'] = bool(card_enabled) if card_name else False
-
-                    if item_info.get('item_detail'):
-                        try:
-                            item_info['item_detail_parsed'] = json.loads(item_info['item_detail'])
-                        except (TypeError, json.JSONDecodeError):
-                            item_info['item_detail_parsed'] = {}
-                    items.append(item_info)
-                return items
-        except Exception as e:
-            logger.error(f"批量获取商品及绑定卡券失败: {e}")
             return []
 
     def get_all_items(self) -> List[Dict]:
@@ -7191,61 +6567,6 @@ Cookie数量: {cookie_count}
 
         except Exception as e:
             logger.error(f"更新商品详情失败: {e}")
-            self.conn.rollback()
-            return False
-
-    def update_item_local_fields(self, cookie_id: str, item_id: str,
-                                 fields: Dict[str, Any]) -> bool:
-        """更新本地商品资料，不会调用闲鱼接口或修改在线商品。
-
-        ``fields`` 使用面向表单的字段名：title、description、category、price、detail；
-        同时保留 ``item_detail`` 以兼容旧客户端。
-        """
-        field_mapping = {
-            'title': 'item_title',
-            'item_title': 'item_title',
-            'description': 'item_description',
-            'item_description': 'item_description',
-            'category': 'item_category',
-            'item_category': 'item_category',
-            'price': 'item_price',
-            'item_price': 'item_price',
-            'detail': 'item_detail',
-            'item_detail': 'item_detail',
-        }
-        updates: List[str] = []
-        params: List[Any] = []
-        for request_field, column_name in field_mapping.items():
-            if request_field not in fields:
-                continue
-            value = fields[request_field]
-            if request_field == 'detail' and isinstance(value, (dict, list)):
-                value = json.dumps(value, ensure_ascii=False)
-            elif value is not None and not isinstance(value, str):
-                value = str(value)
-            updates.append(f"{column_name} = ?")
-            params.append(value if value is not None else '')
-
-        if not updates:
-            return False
-
-        try:
-            with self.lock:
-                cursor = self.conn.cursor()
-                updates.append("updated_at = CURRENT_TIMESTAMP")
-                params.extend([cookie_id, item_id])
-                cursor.execute(
-                    f"UPDATE item_info SET {', '.join(updates)} WHERE cookie_id = ? AND item_id = ?",
-                    params,
-                )
-                if cursor.rowcount <= 0:
-                    logger.warning(f"未找到要更新的本地商品资料: {item_id}")
-                    return False
-                self.conn.commit()
-                logger.info(f"本地商品资料已更新: {item_id}, fields={list(fields.keys())}")
-                return True
-        except Exception as e:
-            logger.error(f"更新本地商品资料失败: {e}")
             self.conn.rollback()
             return False
 
@@ -11954,3 +11275,4 @@ db_manager = DBManager()
 # 确保进程结束时关闭数据库连接
 import atexit
 atexit.register(db_manager.close)
+

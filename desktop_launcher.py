@@ -2,6 +2,9 @@
 
 该启动器只负责在用户电脑上启动现有服务并打开本地管理页。数据库、账号登录
 Cookie 与闲鱼 WebSocket 均存放并运行在本机，不会因为桌面启动而传到云服务器。
+
+界面形态：**原生应用窗口**（pywebview + WebView2），不是浏览器标签页。
+对齐鱼店长的 WPF 窗口体验：没有地址栏、没有标签页、关窗即退出。
 """
 from __future__ import annotations
 
@@ -11,11 +14,13 @@ import socket
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 
 LOCAL_PORT = int(os.getenv('FISHCLOUD_LOCAL_PORT', '18790'))
+
+# 后端线程状态（给窗口显示错误用）
+_BACKEND = {'error': None, 'ready': False}
 
 
 def resource_root() -> Path:

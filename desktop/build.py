@@ -51,6 +51,13 @@ def main() -> None:
         '--collect-submodules', 'fastapi',
         '--collect-submodules', 'uvicorn',
         '--collect-submodules', 'playwright',
+        # 原生窗口（pywebview + WebView2）：界面不再依赖系统浏览器标签页。
+        # 其 JS/资源必须显式收集，pythonnet 也要带上，否则打包后窗口起不来。
+        '--collect-submodules', 'webview',
+        '--collect-data', 'webview',
+        '--hidden-import', 'webview.platforms.edgechromium',
+        '--hidden-import', 'clr',
+        '--hidden-import', 'pythonnet',
         '--hidden-import', 'Start',
         # Start.py 通过字符串启动该服务，静态分析无法自动发现它。
         '--hidden-import', 'reply_server',
