@@ -5880,16 +5880,46 @@ async def _execute_password_login(session_id: str, account_id: str, account: str
             from db_manager import db_manager  # 在函数开头导入，避免作用域问题
             from XianyuAutoAsync import XianyuLive
             try:
-                cookies_dict = slider_instance.login_with_password_playwright(
-                    account=account,
-                    password=password,
-                    show_browser=show_browser,
-                    notification_callback=notification_callback,
-                    force_clean_context=is_refresh_mode
-                )
-                
+                # 鱼店长方式：在账号的常驻浏览器会话内完成「切换账号登录 →
+                # 勾选协议 → 填账号密码 → 点击登录」四步（BrowserAutoLogin），
+                # 验证码由同一会话的页内滑块处理。
+                # 不再用 XianyuSliderStealth.login_with_password_playwright ——
+                # 那套自成一套浏览器，会话态与后续请求不一致。
+                _live = XianyuLive.get_instance(account_id)
+                _loop = None
+                try:
+                    from cookie_manager import manager as _cm
+                    _loop = getattr(_cm, 'loop', None)
+                except Exception:
+                    _loop = None
+
+                cookies_dict = None
+                _fail_reason = ''
+                if _live is None:
+                    _fail_reason = '账号未在运行，请在桌面客户端中保持账号运行后再试'
+                elif not _live._browser_im_enabled():
+                    _fail_reason = '浏览器会话未启用，无法使用页内登录'
+                elif _loop is None:
+                    _fail_reason = '拿不到账号事件循环，无法使用页内登录'
+                else:
+                    try:
+                        _fut = asyncio.run_coroutine_threadsafe(
+                            _live._try_browser_auto_login('面板手动密码登录'), _loop
+                        )
+                        _ok = _fut.result(timeout=260)
+                        if _ok:
+                            cookies_dict = trans_cookies(_live.cookies_str)
+                        else:
+                            _lr = _live.last_auto_login_result
+                            _fail_reason = (
+                                str(_lr.get('reason')) if isinstance(_lr, dict) and _lr.get('reason')
+                                else '页内四步登录未成功'
+                            )
+                    except Exception as _login_err:
+                        _fail_reason = f'页内登录异常: {_login_err}'
+
                 if cookies_dict is None:
-                    failure_message = slider_instance.last_login_error or '登录失败，请检查账号密码是否正确'
+                    failure_message = _fail_reason or '登录失败，请检查账号密码是否正确'
                     _finalize_password_login_session_failure(session_id, failure_message)
                     log_with_user('error', f"账号密码登录失败: {account_id}, 错误: {failure_message}", current_user)
                     return
@@ -6434,20 +6464,51 @@ async def _execute_manual_cookie_import(
                     )
                 log_with_user('info', f"手动导入 Cookie 已解析 verification_url: {account_id}", current_user)
 
-                strict_result = run_slider_with_fallback(
-                    slider_instance,
-                    target_url,
-                    engine="playwright",
-                    notification_callback=notification_callback,
-                    notification_scene='手动导入 Cookie',
-                )
-                if not strict_result.success or not strict_result.cookies:
-                    failure_message = slider_instance._get_slider_failure_message(strict_result.message)
-                    _set_manual_cookie_import_session_status(session_id, 'failed', error=failure_message)
-                    log_with_user('error', f"手动导入 Cookie 验证失败: {account_id}, 错误: {failure_message}", current_user)
-                    return
+                # 鱼店长方式：在账号的常驻浏览器会话内做页内滑块。
+                # 不再走 run_slider_with_fallback（页外 Playwright 滑块）——
+                # 那套要另起浏览器、另装 cookie，验证环境与真实会话不一致。
+                #
+                # 注意：run_import() 跑在后台线程里，而 browser_im 会话绑定在
+                # 账号实例所在的事件循环上，必须用 run_coroutine_threadsafe 提交，
+                # 不能在此直接 await。
+                from XianyuAutoAsync import XianyuLive
 
-                merged_cookies_dict = merge_cookie_dicts_for_import(strict_result.cookies, '浏览器验证')
+                _live = XianyuLive.get_instance(account_id)
+                inline_cookies = None
+                _loop = None
+                try:
+                    from cookie_manager import manager as _cm
+                    _loop = getattr(_cm, 'loop', None)
+                except Exception:
+                    _loop = None
+
+                if _live is not None and _live._browser_im_enabled() and _loop is not None:
+                    try:
+                        _fut = asyncio.run_coroutine_threadsafe(
+                            _live._browser_auto_slider(target_url), _loop
+                        )
+                        inline_cookies = _fut.result(timeout=200)
+                    except Exception as _inline_err:
+                        log_with_user(
+                            'warning',
+                            f"页内滑块执行异常: {account_id}, {_inline_err}",
+                            current_user,
+                        )
+                        inline_cookies = None
+
+                if not inline_cookies:
+                    if _live is None:
+                        reason = '账号未在运行，页内滑块不可用（请先在桌面客户端里保持账号运行）'
+                    elif not _live._browser_im_enabled():
+                        reason = '浏览器会话未启用，页内滑块不可用'
+                    elif _loop is None:
+                        reason = '拿不到账号事件循环，页内滑块不可用'
+                    else:
+                        reason = '页内自动滑块未通过'
+                    _set_manual_cookie_import_session_status(session_id, 'failed', error=reason)
+                    log_with_user('error', f"手动导入 Cookie 验证失败: {account_id}, {reason}", current_user)
+                    return
+                merged_cookies_dict = merge_cookie_dicts_for_import(inline_cookies, '浏览器验证')
                 persist_manual_cookie_import_success(merged_cookies_dict, '浏览器验证')
             except Exception as exc:
                 error_message = str(exc)
