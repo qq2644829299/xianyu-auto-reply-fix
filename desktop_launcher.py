@@ -50,11 +50,6 @@ def wait_for_local_server(port: int, timeout: float = 30.0) -> bool:
     return False
 
 
-def open_local_console(port: int) -> None:
-    if wait_for_local_server(port):
-        webbrowser.open(f'http://127.0.0.1:{port}')
-
-
 def prepare_local_runtime() -> Path:
     app_root = resource_root()
     data_root = user_data_root()
@@ -86,10 +81,90 @@ def prepare_local_runtime() -> Path:
     return data_root
 
 
+ERROR_HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;font-family:"Microsoft YaHei",sans-serif;background:#0f172a;color:#e2e8f0;
+display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px;padding:32px;text-align:center}
+h1{font-size:20px;margin:0;color:#f87171}p{color:#94a3b8;font-size:13px;margin:0;line-height:1.7}
+code{background:#1e293b;padding:2px 6px;border-radius:4px;color:#7dd3fc;font-size:12px}
+</style></head><body>
+<h1>本地服务启动失败</h1>
+<p>后端没有在预期时间内就绪，请查看日志：</p>
+<p><code id="logpath"></code></p>
+<p>常见原因：端口被占用、首次启动较慢、依赖缺失。</p>
+<script>
+document.getElementById('logpath').textContent = "%LOGPATH%";
+</script>
+</body></html>"""
+
+
+def _run_backend() -> None:
+    """在子线程里跑完整后端（Start.py 的 main 会永久阻塞，正好当服务）。"""
+    try:
+        runpy.run_module('Start', run_name='__main__')
+    except SystemExit:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        _BACKEND['error'] = f'{type(exc).__name__}: {exc}'
+
+
+def _open_fallback_browser(port: int) -> None:
+    """原生窗口不可用时的兜底：用系统浏览器打开本地管理页。"""
+    try:
+        import webbrowser
+        webbrowser.open(f'http://127.0.0.1:{port}')
+    except Exception:
+        pass
+
+
 def main() -> None:
-    prepare_local_runtime()
-    threading.Thread(target=open_local_console, args=(LOCAL_PORT,), daemon=True).start()
-    runpy.run_module('Start', run_name='__main__')
+    data_root = prepare_local_runtime()
+
+    # 1) 后端放子线程（Start.py 内部是 asyncio 永久等待，天然适合当服务）
+    threading.Thread(target=_run_backend, daemon=True, name='fishcloud-backend').start()
+
+    # 2) 等后端就绪（首次启动要初始化数据库与依赖）
+    ready = wait_for_local_server(LOCAL_PORT, timeout=120)
+    _BACKEND['ready'] = ready
+    url = f'http://127.0.0.1:{LOCAL_PORT}'
+
+    # 3) 原生窗口（pywebview + WebView2），不是浏览器标签页
+    try:
+        import webview
+
+        if ready:
+            window = webview.create_window(
+                '鱼智云本地客户端',
+                url=url,
+                width=1280,
+                height=820,
+                min_size=(1024, 700),
+                background_color='#0f172a',
+            )
+        else:
+            log_hint = str(data_root / 'logs').replace('\\', '\\\\')
+            window = webview.create_window(
+                '鱼智云本地客户端',
+                html=ERROR_HTML.replace('%LOGPATH%', log_hint),
+                width=900,
+                height=520,
+                background_color='#0f172a',
+            )
+        # gui='edgechromium' 强制 WebView2，避免落到 mshtml 等老后端
+        webview.start(gui='edgechromium')
+        # 窗口关闭 -> 主线程结束 -> 进程退出（daemon 线程随之结束）
+        return
+    except Exception as exc:  # noqa: BLE001
+        _BACKEND['window_error'] = f'{type(exc).__name__}: {exc}'
+        print(f'[WARN] 原生窗口启动失败，退回系统浏览器: {exc}')
+
+    # 4) 兜底：系统浏览器
+    _open_fallback_browser(LOCAL_PORT)
+    # 阻止主线程退出，保持后端继续运行
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == '__main__':
