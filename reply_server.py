@@ -983,32 +983,9 @@ def verify_admin_token(credentials: Optional[HTTPAuthorizationCredentials] = Dep
     return user_info
 
 
-def _local_client_admin() -> Dict[str, Any]:
-    """本地桌面客户端的内置管理员身份。
-
-    桌面版只监听 127.0.0.1、数据全在本机、且是单用户使用，不需要再登录一层
-    系统账号（闲鱼账号的登录已经由浏览器内的扫码/密码自动登录承担）。
-    服务器部署时不会设置 FISHCLOUD_LOCAL_CLIENT，因此账号体系保持原样。
-    """
-    try:
-        cursor = db_manager.conn.cursor()
-        db_manager._execute_sql(
-            cursor, "SELECT id, username FROM users ORDER BY id LIMIT 1"
-        )
-        row = cursor.fetchone()
-        if row:
-            return {'user_id': row[0], 'username': row[1], 'is_admin': True}
-    except Exception:
-        pass
-    return {'user_id': 1, 'username': 'admin', 'is_admin': True}
-
-
 def require_auth(user_info: Optional[Dict[str, Any]] = Depends(verify_token)):
     """需要认证的依赖，返回用户信息"""
     if not user_info:
-        # 本地桌面客户端直接视为管理员（仅监听 127.0.0.1，不外露）
-        if os.getenv('FISHCLOUD_LOCAL_CLIENT') == '1':
-            return _local_client_admin()
         raise HTTPException(status_code=401, detail="未授权访问")
     return user_info
 

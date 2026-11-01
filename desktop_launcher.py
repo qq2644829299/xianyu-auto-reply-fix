@@ -165,44 +165,6 @@ def _inject_desktop_look(window) -> None:
     (function(){
       if (window.__fcDesktopHooked) return;
       window.__fcDesktopHooked = true;
-
-      // 桌面版是单用户本机应用，不需要系统账号这一层：
-      // 登录页/注册页/用户管理/登出全部隐藏
-      //（闲鱼账号的登录由浏览器内扫码/密码自动登录承担）。
-      function hideAccountUi() {
-        function hideBox(el) {
-          var box = el.closest('.nav-item') || el.closest('li') || el;
-          if (box) box.style.display = 'none';
-        }
-        // 1) 导航项：按文本匹配
-        document.querySelectorAll('.nav-item, .nav-link, a, button').forEach(function(el){
-          var t = (el.textContent || '').trim();
-          if (t === '用户管理' || t === '登出' || t === '退出登录' ||
-              t === '登录' || t === '注册' || t === '退出') {
-            hideBox(el);
-          }
-        });
-        // 2) onclick 里带 logout 的按钮
-        document.querySelectorAll('[onclick*="logout"]').forEach(hideBox);
-        // 3) 指向登录/注册页的链接
-        document.querySelectorAll('a[href*="login.html"], a[href*="register.html"]').forEach(hideBox);
-        // 4) 用户管理内容区（id 用连字符）
-        ['user-management-section', 'userManagementSection'].forEach(function(id){
-          var el = document.getElementById(id);
-          if (el) el.style.display = 'none';
-        });
-        // 5) 按 data-menu-id 兜底
-        document.querySelectorAll('[data-menu-id="user-management"]').forEach(function(el){
-          el.style.display = 'none';
-        });
-      }
-      hideAccountUi();
-      // 面板是 SPA 式渲染，DOM 变化后再兜一次
-      try {
-        new MutationObserver(function(){ hideAccountUi(); })
-          .observe(document.body, { childList: true, subtree: true });
-      } catch (e) {}
-
       // 右键菜单：输入框内保留，其它位置屏蔽（桌面应用没有"网页右键"）
       document.addEventListener('contextmenu', function(e){
         var t = e.target;
@@ -332,9 +294,10 @@ def main() -> None:
     # 2) 等后端就绪（首次启动要初始化数据库与依赖）
     ready = wait_for_local_server(LOCAL_PORT, timeout=120)
     _BACKEND['ready'] = ready
-    # 直接进管理面板：桌面版不需要系统账号登录这一层
-    #（'/' 是给搜索引擎看的营销官网，/login.html 是系统账号登录页，都不该出现在客户端里）
-    url = f'http://127.0.0.1:{LOCAL_PORT}/admin'
+    # 桌面客户端入口 = 应用内登录页。
+    # 不用 '/'（那是给搜索引擎看的营销官网 landing.html），
+    # 也不跳过登录直接进 /admin —— 登录这一步要保留，只是要发生在应用窗口内。
+    url = f'http://127.0.0.1:{LOCAL_PORT}/login.html'
 
     # 3) 原生窗口（pywebview + WebView2），不是浏览器标签页
     try:
