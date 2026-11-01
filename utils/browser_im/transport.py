@@ -126,8 +126,39 @@ class BrowserIMTransport:
         这里的健壮性很关键：一旦泵退出，之后所有 IM 消息都不会再被转发，
         表现为"连接在、消息不来"的假在线。因此单条事件处理失败只记日志，
         绝不终止循环。
+
+        另外**必须定期主动核对页面里 IM WS 的真实状态**：
+        劫持脚本是在页面加载前注入的，但常驻页面里的 IM WebSocket 往往在
+        挂载/复用上下文时就已由页面自己建好，`open` 事件根本不会被捕获到。
+        只依赖事件会让 `state` 永远停在 -1/3，上层 `closed` 一直为真，
+        主循环就不断重连、前端一直显示「连接中」——而实际上消息是通的。
         """
+        last_state_sync = 0.0
+
         while not self._closed_local:
+            now = time.time()
+            if now - last_state_sync >= 5.0:
+                last_state_sync = now
+                try:
+                    st = await self.session.im_ws_state()
+                    rs = int(st.get("readyState", -1))
+                    if rs == 1:
+                        if self._last_state != 1:
+                            logger.info(
+                                f"【{self.cookie_id}】[浏览器Ws] 页面 IM WS 已就绪"
+                                f"（主动核对，state 补齐为 1）"
+                            )
+                            self._registered = True
+                        self._last_state = 1
+                    elif rs in (-1, 2, 3):
+                        if self._last_state == 1:
+                            logger.warning(
+                                f"【{self.cookie_id}】[浏览器Ws] 页面 IM WS 已不可用 readyState={rs}"
+                            )
+                        self._last_state = 3 if rs == 3 else self._last_state
+                except Exception as exc:
+                    logger.debug(f"【{self.cookie_id}】状态核对失败（忽略）: {exc}")
+
             try:
                 event = await self.session.next_event(timeout=1.0)
             except asyncio.CancelledError:

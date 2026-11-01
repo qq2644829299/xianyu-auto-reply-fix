@@ -1,4 +1,4 @@
-"""鱼智云本地客户端启动器。
+﻿"""鱼智云本地客户端启动器。
 
 该启动器只负责在用户电脑上启动现有服务并打开本地管理页。数据库、账号登录
 Cookie 与闲鱼 WebSocket 均存放并运行在本机，不会因为桌面启动而传到云服务器。
@@ -161,10 +161,50 @@ def _inject_desktop_look(window) -> None:
             "document.head.appendChild(s);})();"
         )
 
-    js_behavior = """
+    js_behavior = r"""
     (function(){
       if (window.__fcDesktopHooked) return;
       window.__fcDesktopHooked = true;
+      // ---- 面向最终用户的界面简化 ----
+      // 真实用户只需要两种登录方式：扫码登录 / 账密登录。
+      // 其余（轻量扫码、手动刷新 Cookie、导入 Cookie、账号保活诊断/轻保活、
+      // 验证截图）都是技术向功能，普通用户看不懂也用不到，全部隐藏。
+      var HIDE_SELECTORS = [
+        '.qr-login-lite-btn',        // 轻量扫码
+        '.refresh-cookie-btn',       // 手动刷新 Cookie
+        '.manual-input-btn',         // 导入 Cookie
+        '.account-diagnostics-card', // 账号保活诊断整卡（含"立即轻保活"）
+        '#aboutDiagnosticsKeepaliveBtn',
+        '#aboutDiagnosticsRefreshBtn',
+        '#refreshCookieProgress',
+        '.manual-cookie-import-entry',
+        '.captcha-screenshot-entry',
+        '#verificationScreenshotModal'
+      ];
+
+      function simplifyForEndUser() {
+        HIDE_SELECTORS.forEach(function(sel){
+          document.querySelectorAll(sel).forEach(function(el){
+            el.style.display = 'none';
+          });
+        });
+        // 文案里带这些词的按钮/链接一并隐藏（覆盖动态渲染的入口）
+        var kws = ['轻量扫码', '导入 Cookie', '导入Cookie', '立即轻保活',
+                   '手动刷新 Cookie', '查看验证截图', '验证截图'];
+        document.querySelectorAll('button, a.btn, .nav-link').forEach(function(el){
+          var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+          for (var i = 0; i < kws.length; i++) {
+            if (t.indexOf(kws[i]) >= 0) { el.style.display = 'none'; break; }
+          }
+        });
+      }
+
+      simplifyForEndUser();
+      try {
+        new MutationObserver(function(){ simplifyForEndUser(); })
+          .observe(document.body, { childList: true, subtree: true });
+      } catch (e) {}
+
       // 右键菜单：输入框内保留，其它位置屏蔽（桌面应用没有"网页右键"）
       document.addEventListener('contextmenu', function(e){
         var t = e.target;
@@ -347,5 +387,6 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
 
 
