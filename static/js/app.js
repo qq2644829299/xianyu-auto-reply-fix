@@ -23747,6 +23747,10 @@ let chatAccountsCache = [];
 let chatCurrentAccount = null;
 let chatSessionsNextCursor = null;
 let chatSessionsHasMore = false;
+// 账号刚启动时 IM 还没连上，后端只能给本地缓存（通常只有几条）。
+// 这里自动补拉几次，等账号连上后会话列表自动补全，不需要用户手动刷新。
+let chatSessionsRetryTimer = null;
+let chatSessionsRetryCount = 0;
 let chatMessagesNextCursor = null;
 let chatMessagesHasMore = false;
 let chatMessagesSource = 'remote_im';
@@ -24330,6 +24334,23 @@ async function refreshChatSessions(append = false) {
         chatSessionsCache = append ? mergeChatSessionLists(chatSessionsCache, incomingSessions) : incomingSessions;
         if (!append && result.remote_error) {
             console.debug('直连IM会话提示:', result.remote_error);
+        }
+        // 只有本地缓存（或直连失败）说明账号还没连上 IM：过几秒自动再拉，
+        // 最多 6 次，每次成功走远端就清空计数。用户不用手动点刷新。
+        if (!append && (result.remote_error || result.source !== 'remote_im')) {
+            if (chatSessionsRetryCount < 6) {
+                chatSessionsRetryCount += 1;
+                if (chatSessionsRetryTimer) clearTimeout(chatSessionsRetryTimer);
+                chatSessionsRetryTimer = setTimeout(() => {
+                    if (chatCurrentCookieId) refreshChatSessions(false);
+                }, 6000);
+            }
+        } else if (!append) {
+            chatSessionsRetryCount = 0;
+            if (chatSessionsRetryTimer) {
+                clearTimeout(chatSessionsRetryTimer);
+                chatSessionsRetryTimer = null;
+            }
         }
         if (!chatSessionsCache.length) {
             const hint = result.remote_error || '暂无会话记录';

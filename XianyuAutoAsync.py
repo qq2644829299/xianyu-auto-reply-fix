@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import re
 import time
@@ -13640,6 +13640,71 @@ class XianyuLive:
             if current and not current.done():
                 current.cancel()
 
+    async def _request_lwp_via_temp_connection(self, lwp: str, body: list, timeout: int = 12):
+        """当前通道拿不到回包时，用一条短命直连把只读查询做完就关。
+
+        背景：浏览器通道正常时，页面自己那套 IM 已经维持连接，我们借它的 WS 发
+        lwp 查询即可。但页面 IM WS 偶发起不来（自愈重载期间 / 页面被平台拦），
+        这时会话列表和历史消息就会空，在线客服只剩本地缓存那几条。
+
+        在线客服的列表和消息都是**只读**查询，必须保证有数据，所以这里补一条
+        临时连接兜底：建连 -> 查询 -> 立刻关闭，尽量缩短并存时间。
+        """
+        mid = generate_mid()
+        deadline_timeout = max(3, int(timeout or 12))
+        websocket = None
+        try:
+            headers = self._build_websocket_headers()
+            async with await self._create_direct_websocket_connection(headers) as websocket:
+                try:
+                    await self.init(websocket)
+                except Exception as init_exc:
+                    logger.debug(f"【{self.cookie_id}】临时连接初始化告警: {self._safe_str(init_exc)}")
+                await websocket.send(json.dumps({
+                    "lwp": lwp,
+                    "headers": {"mid": mid},
+                    "body": body,
+                }))
+                while True:
+                    raw = await asyncio.wait_for(websocket.recv(), timeout=deadline_timeout)
+                    try:
+                        message = json.loads(raw)
+                    except Exception:
+                        continue
+                    if not isinstance(message, dict):
+                        continue
+                    recv_mid = str((message.get("headers") or {}).get("mid") or "")
+                    if recv_mid != mid:
+                        # 顺手回执，避免临时连接被当成哑客户端
+                        try:
+                            ack = {"code": 200, "headers": {"mid": recv_mid or generate_mid(),
+                                                            "sid": (message.get("headers") or {}).get("sid", "")}}
+                            await websocket.send(json.dumps(ack))
+                        except Exception:
+                            pass
+                        continue
+                    result = message.get("body", {})
+                    return result if isinstance(result, dict) else {}
+        except asyncio.TimeoutError:
+            logger.warning(f"【{self.cookie_id}】临时连接查询超时: lwp={lwp}, timeout={deadline_timeout}s")
+            return {"code": "temp_timeout", "reason": "临时连接查询超时"}
+        except Exception as exc:
+            logger.warning(f"【{self.cookie_id}】临时连接查询失败: lwp={lwp}, error={self._safe_str(exc)}")
+            return {"code": "temp_failed", "reason": self._safe_str(exc)}
+
+    @staticmethod
+    def _lwp_body_failed(body: Any) -> bool:
+        """判断一次 lwp 查询是不是"没拿到真实数据"。"""
+        if not isinstance(body, dict) or not body:
+            return True
+        code = str(body.get("code") or "")
+        reason = body.get("reason") or body.get("developerMessage")
+        if code in ("timeout", "not_connected", "request_failed", "temp_timeout", "temp_failed"):
+            return True
+        if reason and not (body.get("userConvs") or body.get("userMessageModels")):
+            return True
+        return False
+
     async def list_all_conversations(self, cid: str, page_size: int = 20):
         """拉取指定会话的历史消息。"""
         logger.info(f"【{self.cookie_id}】开始通过独立临时连接拉取历史消息: chat_id={cid}, page_size={page_size}")
@@ -13800,8 +13865,33 @@ class XianyuLive:
                 continue
             logger.info(
                 f"【{self.cookie_id}】最近会话拉取完成: "
-                f"count={len(last_body.get('userConvs', [])) if isinstance(last_body, dict) else 0}"
+                f"count={len(last_body.get('userConvs', [])) if isinstance(last_body, dict) else 0}, "
+                f"code={last_body.get('code') if isinstance(last_body, dict) else None}, "
+                f"reason={self._safe_str(last_body.get('reason')) if isinstance(last_body, dict) and last_body.get('reason') else '-'}, "
+                f"hasMore={last_body.get('hasMore') if isinstance(last_body, dict) else None}, "
+                f"nextCursor={last_body.get('nextCursor') if isinstance(last_body, dict) else None}"
             )
+            if self._lwp_body_failed(last_body):
+                # 在线客服的会话列表必须出得来，主通道没数据就临时直连补一次。
+                logger.warning(
+                    f"【{self.cookie_id}】主通道未取到会话列表，改用临时直连兜底: "
+                    f"code={last_body.get('code') if isinstance(last_body, dict) else None}"
+                )
+                fallback_body = await self._request_lwp_via_temp_connection(
+                    "/r/Conversation/listNewestPagination",
+                    [start_timestamp, limit],
+                    timeout=15,
+                )
+                if isinstance(fallback_body, dict) and fallback_body.get("userConvs"):
+                    logger.info(
+                        f"【{self.cookie_id}】临时直连兜底成功: "
+                        f"count={len(fallback_body.get('userConvs') or [])}"
+                    )
+                    return fallback_body
+                logger.warning(
+                    f"【{self.cookie_id}】临时直连兜底同样无数据: "
+                    f"code={fallback_body.get('code') if isinstance(fallback_body, dict) else None}"
+                )
             return last_body
 
         return last_body
@@ -13839,6 +13929,28 @@ class XianyuLive:
             f"【{self.cookie_id}】分页消息拉取完成: "
             f"chat_id={normalized_cid}, count={len(body.get('userMessageModels', [])) if isinstance(body, dict) else 0}"
         )
+        if self._lwp_body_failed(body):
+            # 历史消息同样必须出得来，主通道空就临时直连补一次。
+            logger.warning(
+                f"【{self.cookie_id}】主通道未取到历史消息，改用临时直连兜底: "
+                f"chat_id={normalized_cid}, code={body.get('code') if isinstance(body, dict) else None}"
+            )
+            fallback_body = await self._request_lwp_via_temp_connection(
+                "/r/MessageManager/listUserMessages",
+                [full_cid, False, start_timestamp, limit, False],
+                timeout=15,
+            )
+            if isinstance(fallback_body, dict) and fallback_body.get("userMessageModels"):
+                logger.info(
+                    f"【{self.cookie_id}】历史消息临时直连兜底成功: "
+                    f"chat_id={normalized_cid}, count={len(fallback_body.get('userMessageModels') or [])}"
+                )
+                return fallback_body
+            logger.warning(
+                f"【{self.cookie_id}】历史消息临时直连兜底同样无数据: "
+                f"chat_id={normalized_cid}, code={fallback_body.get('code') if isinstance(fallback_body, dict) else None}"
+            )
+            return fallback_body if isinstance(fallback_body, dict) else (body if isinstance(body, dict) else {})
         return body if isinstance(body, dict) else {}
 
     async def fetch_conversation_history_once(self, cid: str, page_size: int = 20):
