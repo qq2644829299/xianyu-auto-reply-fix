@@ -292,6 +292,16 @@ class BrowserIMSession:
                     launch_args["executable_path"] = exe
                     logger.info(f"【{self.cookie_id}】使用浏览器可执行文件: {exe}")
 
+                # 有头模式下把窗口移到屏幕外：
+                # 闲鱼会对无头浏览器直接返回「非法访问 为了保障您的体验，请使用正常
+                # 浏览器访问闲鱼~」，所以必须用有头；但用户又不该看到一个多余的
+                # 浏览器窗口，因此把窗口放到屏幕外（存在且正常渲染，只是看不见）。
+                if not self.headless:
+                    launch_args["args"].extend([
+                        "--window-position=-32000,-32000",
+                        "--window-size=1280,900",
+                    ])
+
                 proxy_cfg = self._build_proxy_cfg()
                 if proxy_cfg:
                     launch_args["proxy"] = proxy_cfg

@@ -70,10 +70,10 @@ def prepare_local_runtime() -> Path:
     # ---- 形态 B：桌面客户端承担全部浏览器工作 ----
     # desktop 模式允许启用浏览器兜底；server 模式才会禁用。
     os.environ.setdefault('DEPLOY_MODE', 'desktop')
-    # 浏览器默认**无头**：有头会额外弹出一个可见的 Edge 窗口，用户会以为
-    # 客户端"又开了一个浏览器"。桌面版靠页内自动滑块处理验证；确实需要人工
-    # 介入时，把下面这行改成 '0'（或配置文件 headless: false）即可看到窗口。
-    os.environ.setdefault('XY_BROWSER_HEADLESS', '1')
+    # 必须用有头：闲鱼对无头浏览器直接返回「非法访问 请使用正常浏览器访问闲鱼」。
+    # 为避免用户看到多余的浏览器窗口，browser_session 在有头模式下会把窗口
+    # 移到屏幕外（--window-position=-32000,-32000），窗口存在但不可见。
+    os.environ.setdefault('XY_BROWSER_HEADLESS', '0')
     # 浏览器 profile 落到用户目录，升级/重装不丢登录态。
     os.environ.setdefault('FISHCLOUD_BROWSER_DATA', str(browser_root))
 
@@ -387,6 +387,7 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
 
 
 
