@@ -117,11 +117,28 @@
     }
   </style>
   <link rel="stylesheet" href="/static/css/fishcloud-auth.css">
+  <style>
+    /* 登录页左侧为纯展示区：不可点击、不可选中、不可拖拽图片 */
+    .auth-story,
+    .auth-story * {
+      pointer-events: none !important;
+      -webkit-user-select: none !important;
+      user-select: none !important;
+      cursor: default !important;
+    }
+    .auth-story img {
+      -webkit-user-drag: none !important;
+    }
+    /* 品牌区保持链接外观（已去掉 href，这里只是视觉上不去掉下划线） */
+    .auth-story .auth-brand {
+      text-decoration: none;
+    }
+  </style>
 </head>
 <body>
   <main class="auth-layout">
     <aside class="auth-story">
-      <a class="auth-brand" href="/"><img src="/static/brand-mark.svg" alt=""><span>鱼智云</span></a>
+      <div class="auth-brand"><img src="/static/brand-mark.svg" alt=""><span>鱼智云</span></div>
       <div class="auth-story-copy"><span>SELLER OPERATIONS</span><h1>每一条咨询，<br>都进入清楚的经营流程。</h1><p>连接账号、商品、会话和自动发货。需要你判断时，系统把控制权交还给你。</p></div>
       <div class="auth-story-status"><i></i><span>平台服务运行正常</span><b>全天候</b></div>
     </aside>
@@ -933,4 +950,5 @@
   </script>
 </body>
 </html>
+
 
