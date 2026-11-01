@@ -173,8 +173,73 @@ def _inject_desktop_look(window) -> None:
         print(f'[WARN] 注入桌面样式失败（不影响使用）: {exc}')
 
 
+def _patch_playwright_browser_path() -> None:
+    """让**所有** Playwright 调用都使用系统浏览器（Edge/Chrome）。
+
+    打包成 exe 后没有 Playwright 自带的 Chromium（PyInstaller 打不进
+    chrome-headless-shell），项目里原有的这些链路会直接抛
+    "Executable doesn't exist at ...\\playwright\\driver\\...\\chrome-headless-shell.exe"：
+      - XianyuAutoAsync._refresh_cookies_via_browser（Cookie 刷新）
+      - utils/order_detail_fetcher（订单详情抓取）
+      - utils/xianyu_slider_stealth（滑块）
+      - utils/persistent_browser（常驻浏览器）
+
+    之前只有 browser_im 自己做了浏览器探测，其它调用仍在找自带 Chromium。
+    这里在进程级别给 BrowserType.launch / launch_persistent_context 注入
+    executable_path，一次性覆盖所有调用点。
+    """
+    try:
+        from utils.browser_im.browser_session import pick_browser_executable
+        exe = pick_browser_executable()
+    except Exception as exc:
+        print(f'[WARN] 探测系统浏览器失败: {exc}')
+        return
+    if not exe:
+        print('[WARN] 未找到系统浏览器（Edge/Chrome），部分功能可能不可用')
+        return
+
+    patched = []
+
+    def _wrap(cls, label: str) -> None:
+        for name in ('launch', 'launch_persistent_context'):
+            orig = getattr(cls, name, None)
+            if orig is None or getattr(orig, '__fc_patched__', False):
+                continue
+
+            def make(orig_fn):
+                def wrapper(self, *args, **kwargs):
+                    kwargs.setdefault('executable_path', exe)
+                    return orig_fn(self, *args, **kwargs)
+
+                wrapper.__fc_patched__ = True
+                return wrapper
+
+            try:
+                setattr(cls, name, make(orig))
+                patched.append(f'{label}.{name}')
+            except Exception:
+                pass
+
+    try:
+        from playwright.async_api import BrowserType as AsyncBrowserType
+        _wrap(AsyncBrowserType, 'async')
+    except Exception:
+        pass
+    try:
+        from playwright.sync_api import BrowserType as SyncBrowserType
+        _wrap(SyncBrowserType, 'sync')
+    except Exception:
+        pass
+
+    if patched:
+        print(f'[INFO] 已统一 Playwright 浏览器路径 -> {exe}')
+    else:
+        print('[WARN] Playwright 浏览器路径注入未生效')
+
+
 def main() -> None:
     data_root = prepare_local_runtime()
+    _patch_playwright_browser_path()
 
     # 1) 后端放子线程（Start.py 内部是 asyncio 永久等待，天然适合当服务）
     threading.Thread(target=_run_backend, daemon=True, name='fishcloud-backend').start()
@@ -182,9 +247,10 @@ def main() -> None:
     # 2) 等后端就绪（首次启动要初始化数据库与依赖）
     ready = wait_for_local_server(LOCAL_PORT, timeout=120)
     _BACKEND['ready'] = ready
-    # 直接进管理面板：'/' 是给搜索引擎看的营销官网（landing.html），
-    # 桌面客户端进去会看到"官网/注册/登录"，非常网页化。
-    url = f'http://127.0.0.1:{LOCAL_PORT}/admin'
+    # 桌面客户端入口 = 应用内登录页。
+    # 不用 '/'（那是给搜索引擎看的营销官网 landing.html），
+    # 也不跳过登录直接进 /admin —— 登录这一步要保留，只是要发生在应用窗口内。
+    url = f'http://127.0.0.1:{LOCAL_PORT}/login.html'
 
     # 3) 原生窗口（pywebview + WebView2），不是浏览器标签页
     try:
