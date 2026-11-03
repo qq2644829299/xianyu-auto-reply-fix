@@ -4216,7 +4216,18 @@ def _annotate_chat_sessions(cookie_id: str, sessions: List[Dict[str, Any]]) -> L
 
 
 def _get_user_cookies_map(current_user: Dict[str, Any]) -> Dict[str, str]:
+    """当前用户可见的账号表。
+
+    管理员可以管理**所有**账号：否则后台一旦把账号建在别人名下（或历史上
+    账号属于 admin 而新用户来登录），管理端和客户端都会看到"空账号/空订单"，
+    用户会以为没同步。普通用户仍然只能看到自己名下的账号。
+    """
     user_id = current_user['user_id']
+    try:
+        if db_manager.is_admin_user(user_id):
+            return db_manager.get_all_cookies()
+    except Exception:
+        pass
     return db_manager.get_all_cookies(user_id)
 
 
@@ -14291,8 +14302,8 @@ def get_user_orders(current_user: Dict[str, Any] = Depends(get_current_user)):
         user_id = current_user['user_id']
         log_with_user('info', "查询用户订单信息", current_user)
 
-        # 获取用户的所有Cookie
-        user_cookies = db_manager.get_all_cookies(user_id)
+        # 获取用户的所有Cookie（管理员可见全部）
+        user_cookies = _get_user_cookies_map(current_user)
 
         # 获取所有订单数据
         all_orders = []

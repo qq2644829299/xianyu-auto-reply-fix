@@ -17601,9 +17601,56 @@ async function loadOrderCookieFilter() {
     }
 }
 
-// 加载所有订单
-async function loadAllOrders() {
+// 登录后首次进入订单页：本地没有订单就自动跑一次历史同步（每会话一次）
+let orderAutoSyncStarted = false;
+async function maybeAutoSyncOrders(orders) {
+    if (orderAutoSyncStarted) return;
+    if (Array.isArray(orders) && orders.length > 0) {
+        orderAutoSyncStarted = true;
+        return;
+    }
     try {
+        const accounts = await fetchOrderSyncAccounts(true).catch(() => []);
+        if (!accounts || accounts.length === 0) return;
+        orderAutoSyncStarted = true;
+        const fmt = (d) => d.toISOString().slice(0, 10);
+        const end = new Date();
+        const start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const resp = await fetch(`${apiBase}/api/orders/history-sync`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                cookie_id: null,
+                start_date: fmt(start),
+                end_date: fmt(end),
+                max_orders: 120,
+                fetch_details: false,
+            })
+        });
+        const result = await resp.json().catch(() => ({}));
+        if (resp.ok && result.success && result.data) {
+            console.log('首次进入订单页，已自动触发历史订单同步:', result.data.job_id);
+            try {
+                if (result.data.job_id && typeof scheduleOrderHistorySyncPolling === 'function') {
+                    activeOrderHistorySyncJobId = result.data.job_id;
+                    scheduleOrderHistorySyncPolling(result.data.job_id);
+                }
+            } catch (pollErr) {
+                console.debug('自动同步轮询启动失败:', pollErr);
+            }
+        } else {
+            console.debug('自动历史订单同步未启动:', result.detail || result.message || '');
+        }
+    } catch (error) {
+        console.debug('自动历史订单同步失败:', error);
+    }
+}
+
+// 加载所有订单
+async function loadAllOrders() {    try {
         const response = await fetch(`${apiBase}/api/orders`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
@@ -17622,6 +17669,10 @@ async function loadAllOrders() {
 
             // 应用当前筛选条件
             filterOrders(false);
+
+            // 首次进订单页且本地没有任何订单时，自动跑一次历史同步，
+            // 用户不需要自己去找"历史订单同步"按钮。
+            maybeAutoSyncOrders(data.data || []);
         } else {
             console.error('加载订单失败:', data.message);
             showToast('加载订单数据失败: ' + data.message, 'danger');
