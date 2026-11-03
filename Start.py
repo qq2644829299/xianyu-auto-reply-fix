@@ -539,6 +539,34 @@ async def main():
     manager = cm.manager
     print("CookieManager 创建完成")
 
+    # 0) 自动解封历史遗留的"风控保护/人工介入"暂停账号。
+    # 鱼店长不会把账号停在异常状态等用户处理，这里在启动时统一恢复自动重试，
+    # 否则被暂停过的账号永远不会进入重试流程，用户只能自己发现并手动启用。
+    try:
+        healed = 0
+        for cid in list(manager.cookies.keys()):
+            try:
+                if manager.get_cookie_status(cid):
+                    continue
+                detail = db_manager.get_cookie_details(cid) or {}
+                note = str(detail.get('status_note') or '')
+                if not note:
+                    continue
+                try:
+                    manager.cookie_status[cid] = True
+                except Exception:
+                    pass
+                db_manager.save_cookie_status(cid, True)
+                db_manager.update_cookie_status_note(cid, '')
+                healed += 1
+                logger.info(f"自动恢复被暂停的账号: {cid}（原状态: {note}）")
+            except Exception as heal_exc:
+                logger.warning(f"自动恢复账号失败: {cid}, {heal_exc}")
+        if healed:
+            logger.info(f"本次启动自动恢复了 {healed} 个被暂停的账号")
+    except Exception as heal_outer:
+        logger.warning(f"自动恢复暂停账号时出错（不影响启动）: {heal_outer}")
+
     # 1) 从数据库加载的 Cookie 已经在 CookieManager 初始化时完成
     # 为每个启用的 Cookie 启动任务
     for cid, val in manager.cookies.items():

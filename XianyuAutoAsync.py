@@ -805,6 +805,18 @@ class XianyuLive:
         return max(min_wait, int(self.token_retry_interval or min_wait))
 
     async def _protect_account_for_consecutive_failures(self, backoff_state: Optional[Dict[str, Any]] = None) -> bool:
+        """连续失败时的处理：只做静默退避，不暂停账号、不写状态文案。
+
+        对齐鱼店长 Pro 的做法：它从不把账号标成"异常/已暂停"要求人工处理，
+        而是拉长重试间隔继续自动重试，连上就恢复正常。
+
+        这里据此改写：
+          - 不调用 _apply_account_pause_state（不再禁用账号、不再置 FAILED）
+          - 不写 status_note（界面不会出现"连续风控保护中"这类提示）
+          - 把退避窗口指数拉长（上限 1 小时），继续自动重试
+          - 顺手清掉历史遗留的暂停状态，避免老数据把账号卡死
+        返回值固定 False：调用方据此继续走正常重试流程。
+        """
         state = backoff_state or self._get_active_password_login_failure_backoff()
         if not state:
             return False
@@ -818,24 +830,41 @@ class XianyuLive:
         if consecutive_count < threshold:
             return False
 
-        pause_reason = f"连续{consecutive_count}次{reason}"
-        await self._apply_account_pause_state(
-            refresh_status="consecutive_failure_protected",
-            status_note="连续风控保护中",
-            error_message=f"检测到{pause_reason}，已暂停账号等待人工介入",
-            connection_message="连续风控失败，已自动暂停账号",
-            note_error_prefix="写入连续失败保护状态文案失败",
-            status_error_prefix="持久化连续失败保护状态失败",
-            memory_error_prefix="更新连续失败内存状态失败",
+        base_wait = max(180, int(RISK_CONTROL.get('token_retry_min_wait_seconds', 180) or 180))
+        overflow = max(0, consecutive_count - threshold)
+        # 180 -> 360 -> 720 -> 1440 -> 2880 -> 3600 封顶，避免请求风暴又不放弃
+        backoff_seconds = min(3600, base_wait * (2 ** min(overflow, 5)))
+
+        try:
+            XianyuLive.set_password_login_failure_backoff(self.cookie_id, reason, backoff_seconds)
+        except Exception as backoff_exc:
+            logger.debug(f"【{self.cookie_id}】写入退避窗口失败: {self._safe_str(backoff_exc)}")
+
+        self.token_retry_interval = backoff_seconds
+        self.last_token_refresh_status = 'consecutive_failure_backoff'
+        self.last_token_refresh_error_message = f"连续{consecutive_count}次{reason}，静默退避{backoff_seconds}秒"
+
+        # 清掉可能残留的暂停标记，保证账号一直处于自动重试状态
+        try:
+            db_manager.update_cookie_status_note(self.cookie_id, '')
+        except Exception:
+            pass
+        try:
+            db_manager.save_cookie_status(self.cookie_id, True)
+        except Exception:
+            pass
+        try:
+            from cookie_manager import manager as cookie_manager_manager
+            if cookie_manager_manager:
+                cookie_manager_manager.cookie_status[self.cookie_id] = True
+        except Exception:
+            pass
+
+        logger.warning(
+            f"【{self.cookie_id}】连续{consecutive_count}次{reason}，"
+            f"按鱼店长策略静默退避 {backoff_seconds} 秒后继续自动重试（不暂停账号）"
         )
-        await self.send_account_paused_notification(
-            status_note="连续风控保护中",
-            pause_reason=pause_reason,
-            error_message=f"账号在自动恢复过程中已连续触发 {consecutive_count} 次 {reason}，系统已暂停自动恢复以避免继续放大风控。",
-            verification_url='',
-        )
-        await self._request_stop_after_account_pause("连续风控失败触发账号保护")
-        return True
+        return False
 
     def _get_active_password_login_failure_backoff(self, current_time: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """获取仍在生效的密码登录失败退避状态，并处理可忽略的旧滑块退避。"""
@@ -1050,23 +1079,61 @@ class XianyuLive:
         except Exception as stop_e:
             logger.warning(f"【{self.cookie_id}】请求停止暂停账号任务失败: {self._safe_str(stop_e)}")
 
+    async def _apply_soft_backoff(self, label: str, wait_seconds: int) -> None:
+        """只拉长重试间隔：不禁用账号、不写状态文案、不显示"异常"。
+
+        对齐鱼店长 Pro：它遇到风控/验证时不会把账号标成异常等用户处理，
+        而是安静地等一段时间再自己重试。界面上用户只看到账号在重连。
+        """
+        self.current_token = None
+        self.last_token_refresh_status = 'soft_backoff'
+        self.last_token_refresh_error_message = str(label or '').strip()
+        try:
+            self.token_retry_interval = max(60, int(wait_seconds or 900))
+        except (TypeError, ValueError):
+            self.token_retry_interval = 900
+
+        for action, name in (
+            (lambda: db_manager.update_cookie_status_note(self.cookie_id, ''), '清理状态文案'),
+            (lambda: db_manager.save_cookie_status(self.cookie_id, True), '保持账号启用'),
+        ):
+            try:
+                action()
+            except Exception as act_exc:
+                logger.debug(f"【{self.cookie_id}】{name}失败: {self._safe_str(act_exc)}")
+
+        try:
+            from cookie_manager import manager as cookie_manager_soft
+            if cookie_manager_soft:
+                cookie_manager_soft.cookie_status[self.cookie_id] = True
+        except Exception:
+            pass
+
+        try:
+            self._set_connection_state(
+                ConnectionState.CONNECTING,
+                f"{label}，{self.token_retry_interval}秒后自动重试",
+            )
+        except Exception:
+            pass
+
+        logger.warning(
+            f"【{self.cookie_id}】{label}：按鱼店长策略静默退避 {self.token_retry_interval} 秒，"
+            f"期间账号保持启用并自动重试"
+        )
+
     async def _protect_account_from_risk_login_retry(self, error_message: str, status_note: str = "风控保护中") -> bool:
         """命中高风险登录提示后自动禁用账号，避免持续触发更强风控。"""
         message = str(error_message or "").strip()
         if not self._is_account_risk_login_error(message):
             return False
 
-        await self._apply_account_pause_state(
-            refresh_status="account_risk_protected",
-            status_note=status_note,
-            error_message=message,
-            connection_message="检测到账号风控，已自动禁用",
-            note_error_prefix="写入账号状态文案失败",
-            status_error_prefix="持久化账号禁用状态失败",
-            memory_error_prefix="更新内存账号状态失败",
+        await self._apply_soft_backoff(
+            f"账号风控登录提示（{status_note}）",
+            int(RISK_CONTROL.get('risk_login_backoff_seconds', 1800) or 1800),
         )
         logger.error(
-            f"【{self.cookie_id}】检测到账号高风险登录提示，已自动禁用账号并标记为“{status_note}”，停止后续自动登录重试"
+            f"【{self.cookie_id}】检测到账号高风险登录提示，已进入静默退避（不暂停账号、不显示异常状态）"
         )
         try:
             await self._force_websocket_reconnect("检测到账号风控，账号已自动禁用")
@@ -1105,14 +1172,9 @@ class XianyuLive:
                 )
             return False
 
-        await self._apply_account_pause_state(
-            refresh_status="manual_verification_required",
-            status_note=status_note,
-            error_message=message,
-            connection_message=f"检测到{type_name}，已自动暂停账号",
-            note_error_prefix="写入人工验证状态文案失败",
-            status_error_prefix="持久化人工验证暂停状态失败",
-            memory_error_prefix="更新人工验证内存状态失败",
+        await self._apply_soft_backoff(
+            f"待{type_name}",
+            int(RISK_CONTROL.get('manual_verification_backoff_seconds', 900) or 900),
         )
         logger.warning(
             f"【{self.cookie_id}】检测到需要人工完成的{type_name}，已自动暂停账号并标记为“{status_note}”"
@@ -8807,8 +8869,10 @@ class XianyuLive:
                     verification_type=verification_type,
                 )
                 if should_pause_account:
-                    await self._request_stop_after_account_pause(
-                        f"检测到需要人工完成的{verification_type or 'manual_verification'}"
+                    # 不终止账号任务：只拉长间隔继续自动重试（对齐鱼店长）
+                    await self._apply_soft_backoff(
+                        f"待人工验证（{verification_type or 'manual_verification'}）",
+                        int(RISK_CONTROL.get('manual_verification_backoff_seconds', 900) or 900),
                     )
             
             # 用鱼店长的方式：在**常驻浏览器会话内**完成「切换账号登录 → 勾选协议
@@ -8924,7 +8988,10 @@ class XianyuLive:
                                 extra={**base_event_meta, 'status_note': '风控保护中'},
                             ),
                         )
-                    await self._request_stop_after_account_pause("检测到账号高风险登录提示")
+                    await self._apply_soft_backoff(
+                        "账号高风险登录提示",
+                        int(RISK_CONTROL.get('risk_login_backoff_seconds', 1800) or 1800),
+                    )
                     return False
                 backoff_reason, backoff_seconds = XianyuLive.classify_password_login_failure(login_error)
                 XianyuLive.set_password_login_failure_backoff(self.cookie_id, backoff_reason, backoff_seconds)
@@ -8967,7 +9034,10 @@ class XianyuLive:
                             extra={**base_event_meta, 'status_note': '风控保护中'},
                         ),
                     )
-                await self._request_stop_after_account_pause("检测到账号高风险登录异常")
+                await self._apply_soft_backoff(
+                    "账号高风险登录异常",
+                    int(RISK_CONTROL.get('risk_login_backoff_seconds', 1800) or 1800),
+                )
                 return False
             self.last_token_refresh_error_message = self._safe_str(refresh_e)
             backoff_reason, backoff_seconds = XianyuLive.classify_password_login_failure(str(refresh_e))

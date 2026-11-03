@@ -1,4 +1,4 @@
-﻿"""鱼智云本地客户端启动器。
+"""鱼智云本地客户端启动器。
 
 该启动器只负责在用户电脑上启动现有服务并打开本地管理页。数据库、账号登录
 Cookie 与闲鱼 WebSocket 均存放并运行在本机，不会因为桌面启动而传到云服务器。
@@ -179,7 +179,16 @@ def _inject_desktop_look(window) -> None:
         '#refreshCookieProgress',
         '.manual-cookie-import-entry',
         '.captcha-screenshot-entry',
-        '#verificationScreenshotModal'
+        '#verificationScreenshotModal',
+        // ---- 运行态/异常状态展示 ----
+        // 鱼店长从来不告诉用户"账号异常/部分异常"，它自己退避重试直到连上。
+        // 这里把这些技术状态整块隐藏：用户只看到账号在不在线、能不能聊天。
+        '.dashboard-account-runtime',      // 首页账号运行态快照（含"部分异常"）
+        '.manual-intervention-alert',      // "需要人工处理"提示条
+        '.account-status-note-badge',      // 账号列表上的状态说明徽标
+        '.account-diagnostics-status-shell', // 关于页运行态面板
+        '.account-diagnostics-status-note-bar',
+        '.about-status-badge'
       ];
 
       function simplifyForEndUser() {
