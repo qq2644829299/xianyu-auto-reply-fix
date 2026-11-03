@@ -15,6 +15,7 @@ import threading
 from typing import List, Dict, Optional
 from loguru import logger
 from db_manager import db_manager
+from ai_config_resolver import resolve_ai_settings
 
 
 class AIReplyEngine:
@@ -429,6 +430,9 @@ class AIReplyEngine:
                 
                 # 1. 获取AI设置
                 settings = db_manager.get_ai_reply_settings(cookie_id)
+                # 账号级设置里通常没有 api_key（桌面端密钥走云端下发），
+                # 这里必须合并平台配置，否则请求会 401 报错。
+                settings = resolve_ai_settings(settings)
                 custom_prompts = json.loads(settings['custom_prompts']) if settings['custom_prompts'] else {}
 
                 # 2. 获取对话历史
